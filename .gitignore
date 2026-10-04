@@ -1,0 +1,16 @@
+build/
+build-*/
+cmake-build-*/
+web/node_modules/
+web/dist/
+third_party/cef/
+cef_binary_*/
+*.o
+*.a
+*.so
+.cache/
+compile_commands.json
+.vscode/
+__pycache__/
+*.pyc
+/state/
