@@ -204,6 +204,7 @@ namespace mbs::app
         std::atomic<bool> _writersOpen{false};
         std::atomic<bool> _registered{false};
         std::atomic<bool> _stopping{false};
+        std::atomic<bool> _hangTerminating{false}; // the next renderer termination is the hang recovery
         std::mutex _closeMutex;
         std::condition_variable _closed;
         bool _browserClosed = false;

@@ -2,12 +2,18 @@
 #include "cef/runtime.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cmath>
+#include <csignal>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <sstream>
+
+#include <unistd.h>
 
 #include "include/base/cef_callback.h"
 #include "include/cef_app.h"
@@ -30,6 +36,56 @@ namespace mbs::cef
         namespace fs = std::filesystem;
 
         RuntimeSettings gSettings; // the browser process's switches (set before CefInitialize)
+
+        // SIGKILL to the renderer processes of this browser process: command line with
+        // --type=renderer and this process among the first ancestors (renderers are children of
+        // the zygote). Returns how many were killed.
+        int killOwnRenderers()
+        {
+            auto const parentOf = [](pid_t pid) -> pid_t {
+                std::ifstream in("/proc/" + std::to_string(pid) + "/stat");
+                std::string line;
+                std::getline(in, line);
+                auto const close = line.rfind(')'); // the name may contain spaces
+                if (close == std::string::npos)
+                {
+                    return 0;
+                }
+                std::istringstream rest(line.substr(close + 1));
+                char state = 0;
+                pid_t ppid = 0;
+                rest >> state >> ppid;
+                return ppid;
+            };
+            pid_t const self = ::getpid();
+            int killed = 0;
+            std::error_code ec;
+            for (auto const& entry : fs::directory_iterator("/proc", ec))
+            {
+                auto const name = entry.path().filename().string();
+                if (name.empty() || !std::all_of(name.begin(), name.end(), [](unsigned char c) { return std::isdigit(c) != 0; }))
+                {
+                    continue;
+                }
+                std::ifstream in(entry.path() / "cmdline", std::ios::binary);
+                std::string const cmdline((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (cmdline.find("--type=renderer") == std::string::npos)
+                {
+                    continue;
+                }
+                auto const pid = static_cast<pid_t>(std::stol(name));
+                pid_t up = pid;
+                for (int depth = 0; depth < 4 && up > 1 && up != self; ++depth)
+                {
+                    up = parentOf(up);
+                }
+                if (up == self && ::kill(pid, SIGKILL) == 0)
+                {
+                    ++killed;
+                }
+            }
+            return killed;
+        }
 
         CefMessageRouterConfig routerConfig()
         {
@@ -1085,10 +1141,14 @@ namespace mbs::cef
                 impl->unresponsive->Terminate();
                 impl->unresponsive = nullptr;
             }
+            else if (killOwnRenderers() > 0)
+            {
+                // Not reported unresponsive (a hang without input): OnRenderProcessTerminated
+                // follows, as for Terminate().
+            }
             else if (auto host = impl->host())
             {
-                // Not reported unresponsive (a hang without input): close and let the app
-                // create the browser again.
+                // No renderer process found: close and let the app create the browser again.
                 host->CloseBrowser(true);
             }
         });

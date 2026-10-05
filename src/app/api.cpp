@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 #include "app/mxladapters.hpp"
 #include "include/cef_version.h"
@@ -555,6 +556,17 @@ namespace mbs::app
                     }
                     out += body.substr(pos, at - pos) + host;
                     pos = at + inner.size();
+                }
+                // The frontend CEF bundles, through the tunnel, instead of the appspot copy.
+                constexpr std::string_view kRemoteFrontend = "https://chrome-devtools-frontend.appspot.com/serve_rev/";
+                for (auto at = out.find(kRemoteFrontend); at != std::string::npos; at = out.find(kRemoteFrontend, at))
+                {
+                    auto const revEnd = out.find('/', at + kRemoteFrontend.size()); // after "@<revision>"
+                    if (revEnd == std::string::npos)
+                    {
+                        break;
+                    }
+                    out.replace(at, revEnd + 1 - at, "/devtools/");
                 }
                 if (secure)
                 {

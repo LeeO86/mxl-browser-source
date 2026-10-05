@@ -39,6 +39,15 @@ namespace mbs::app
             [[maybe_unused]] auto const n = ::write(gSignalPipe[1], &byte, 1);
         }
 
+        void installSignalHandlers()
+        {
+            struct sigaction action{};
+            action.sa_handler = onSignal;
+            sigemptyset(&action.sa_mask);
+            ::sigaction(SIGTERM, &action, nullptr);
+            ::sigaction(SIGINT, &action, nullptr);
+        }
+
         std::string json(std::string const& text)
         {
             return picojson::value(text).serialize();
@@ -159,16 +168,15 @@ namespace mbs::app
     int Application::run()
     {
         ::pipe2(gSignalPipe, O_CLOEXEC);
-        struct sigaction action{};
-        action.sa_handler = onSignal;
-        sigemptyset(&action.sa_mask);
-        ::sigaction(SIGTERM, &action, nullptr);
-        ::sigaction(SIGINT, &action, nullptr);
+        installSignalHandlers();
 
         prepareState();
         prepareMxl();
         prepareBrowserEnvironment();
         startCef();
+        // CefInitialize installs Chromium's own SIGTERM/SIGINT handlers (a quick exit 0 without
+        // the shutdown sequence): ours again.
+        installSignalHandlers();
         startHttp();
         startNmos();
         startThreads();
@@ -196,10 +204,7 @@ namespace mbs::app
         {
             _outputs.reset();
             _domain.reset();
-            if (mxlio::removeDomain(_cfg.mxlScanPath, _domainDir))
-            {
-                log::info("domain_removed", {{"path", _domainDir}});
-            }
+            mxlio::removeDomain(_cfg.mxlScanPath, _domainDir); // logs domain_removed
         }
         log::info("stopped", {{"exit_code", 143}});
         return 143;
@@ -659,6 +664,7 @@ namespace mbs::app
             _url = url;
             _slateShown = false;
             _loadStarted = Clock::now();
+            _reloadAt.reset(); // a load started anyway (a pending crash reload would reload a newer page)
         }
         setPage(PageStatus::Loading, "");
     }
@@ -796,12 +802,13 @@ namespace mbs::app
         broadcastEvent(R"({"type":"event","data":{"navigation_blocked":)" + json(url) + R"(,"reason":)" + json(reason) + "}}");
     }
 
-    void Application::onRendererTerminated(std::string const& reason)
+    void Application::onRendererTerminated(std::string const& terminationReason)
     {
         if (_stopping.load())
         {
             return;
         }
+        std::string const reason = _hangTerminating.exchange(false) ? "hung" : terminationReason;
         _metrics.inc("renderer_crashes_total", {{"reason", reason}});
         auto const now = Clock::now();
         std::size_t crashes = 0;
@@ -836,6 +843,7 @@ namespace mbs::app
     {
         _metrics.inc("page_hangs_total");
         setPage(PageStatus::Hung, "renderer unresponsive");
+        _hangTerminating.store(true);
         _browser->terminateRenderer();
     }
 

@@ -10,6 +10,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -140,7 +142,8 @@ namespace mbs::util
         {
             return -1;
         }
-        std::string const request = "GET " + path + " HTTP/1.0\r\nHost: " + host + ":" + std::to_string(port) + "\r\nConnection: close\r\n\r\n";
+        // HTTP/1.1: Chromium's DevTools server does not answer HTTP/1.0.
+        std::string const request = "GET " + path + " HTTP/1.1\r\nHost: " + host + ":" + std::to_string(port) + "\r\nConnection: close\r\n\r\n";
         if (::send(fd, request.data(), request.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(request.size()))
         {
             ::close(fd);
@@ -168,6 +171,17 @@ namespace mbs::util
                 break;
             }
             response.append(buf, static_cast<std::size_t>(n));
+            // A server may keep the connection open: stop at Content-Length.
+            if (auto const end = response.find("\r\n\r\n"); end != std::string::npos)
+            {
+                std::string head = response.substr(0, end);
+                std::transform(head.begin(), head.end(), head.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (auto const at = head.find("\r\ncontent-length:"); at != std::string::npos &&
+                    response.size() >= end + 4 + std::strtoull(head.c_str() + at + 17, nullptr, 10))
+                {
+                    break;
+                }
+            }
         }
         ::close(fd);
         // "HTTP/1.x NNN ..."

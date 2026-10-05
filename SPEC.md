@@ -604,7 +604,7 @@ Startup order: parse and validate settings (78) → check the MXL root is tmpfs 
 | Failure | Detection | Behaviour | Recovery |
 | --- | --- | --- | --- |
 | Renderer crash | `OnRenderProcessTerminated` | output holds the last frame (or per `BROWSER_ON_PAGE_ERROR`), audio silent, `renderer_crashes_total` | reload after 1 s, then 2, 5, 10, 30 s backoff; state `crashed` until loaded; after 5 crashes in 10 min state `error` and no automatic reload until an operator reloads |
-| Page hang (JS loop) | the renderer's main thread does not answer a DevTools `Runtime.evaluate("1")` probe (sent every second while the page is loaded) within `BROWSER_HANG_TIMEOUT_MS`, or `OnRenderProcessUnresponsive`. Missing paints cannot tell: a static page paints nothing | hold; `page_hangs_total` | terminate the renderer (`OnRenderProcessUnresponsive` callback, else close and recreate the browser) and continue as a crash |
+| Page hang (JS loop) | the renderer's main thread does not answer a DevTools `Runtime.evaluate("1")` probe (sent every second while the page is loaded) within `BROWSER_HANG_TIMEOUT_MS`, or `OnRenderProcessUnresponsive`. Missing paints cannot tell: a static page paints nothing | hold; `page_hangs_total` | terminate the renderer (`OnRenderProcessUnresponsive` callback, else SIGKILL to the browser's renderer processes; close and recreate the browser only when none is found) and continue as a crash (`renderer_crashes_total{reason="hung"}`) |
 | GPU process crash / GPU lost | `gpu_process_crashes_total` from the log and missing paints | hold while Chromium restarts the GPU process | Chromium falls back to software compositing after repeated GPU crashes; the function reports the real mode (§5.5) and raises the alarm `render_degraded`; a restart of the pod returns to GPU mode |
 | Page load error | `OnLoadError` | per `BROWSER_ON_PAGE_ERROR` | retry with backoff when the source document says so (`reload_interval_s` or an operator reload) |
 | Memory growth | `cef_processes_resident_bytes` over `BROWSER_MAX_RESIDENT_MB` (default 0 = off) | warning event | optional automatic reload |
@@ -736,7 +736,7 @@ Measured on the target GPUs (A4000, L4) and the lab A16, recorded in `docs/perfo
   - `tone.html`: a 1 kHz tone at −20 dBFS arrives on the configured channels; a silent page gives zeros at the same cadence.
   - `interact.html`: a WebSocket client clicks a button, types text (incl. non-ASCII and an IME commit) and scrolls; the page's reaction appears in a grain within 150 ms (lab) and the `ack` grain index is not later than the first grain showing it.
   - `dialogs.html`, `popup.html`, `download.html`, `permissions.html`: nothing blocks; events and counters as in §4.5.
-  - `hang.html` and a test-only API that kills the renderer: output holds, recovery within `BROWSER_HANG_TIMEOUT_MS` + 5 s and within 5 s after a crash, the process stays up.
+  - `hang.html` and `kill -9` of the renderer process (`docker exec`): output holds, recovery within `BROWSER_HANG_TIMEOUT_MS` + 5 s and within 5 s after a crash, the process stays up.
   - Template API with a CasparCG-style template (`play`, `update`, `next`, `stop`).
   - IS-05 enable/disable of each sender; restart restores the enable states.
   - Lifecycle: start → ready (registered) → SIGTERM → exit 143, node gone from the Query API, own domain removed with `MXL_CLEANUP_ON_EXIT=true`, no CEF processes left.
