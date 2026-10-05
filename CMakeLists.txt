@@ -35,10 +35,12 @@ add_library(mbs-core STATIC
     src/config/document.cpp
     src/convert/avx2.cpp
     src/convert/convert.cpp
+    src/engine/engine.cpp
     src/engine/framestore.cpp
     src/engine/tick.cpp
     src/mxlio/setup.cpp
     src/util/logging.cpp
+    src/util/metrics.cpp
     src/util/uuid.cpp
 )
 target_include_directories(mbs-core PUBLIC src third_party)
@@ -51,6 +53,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_main.cpp
         tests/unit/test_audio.cpp
         tests/unit/test_convert.cpp
+        tests/unit/test_engine.cpp
         tests/unit/test_framestore.cpp
         tests/unit/test_tick.cpp
     )

@@ -6,7 +6,6 @@
 // so unit tests run it without CEF or libmxl.
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 
 namespace mbs::engine
@@ -23,8 +22,8 @@ namespace mbs::engine
     {
     public:
         virtual ~TickActions() = default;
-        /// Writes grain `index`: the newest converted frame when `fresh`, else the last one again.
-        virtual void commit(std::uint64_t index, bool fresh) = 0;
+        /// Writes grain `index`. Returns true when it carries a new frame, false for a repeat.
+        virtual bool commit(std::uint64_t index, PageState state) = 0;
         /// Writes the audio samples of grain `index`.
         virtual void writeAudio(std::uint64_t index) = 0;
         /// Posts one BeginFrame to the UI thread.
@@ -37,6 +36,7 @@ namespace mbs::engine
         std::uint64_t repeated = 0;       // ready page, no new paint (unchanged, or late)
         std::uint64_t repeatedHold = 0;   // repeats while the page loads, crashed or hangs
         std::uint64_t missed = 0;         // indexes the thread woke too late for (committed as repeats)
+        std::uint64_t beginFrames = 0;
     };
 
     class Tick
@@ -47,9 +47,6 @@ namespace mbs::engine
         {
         }
 
-        /// A paint was converted into grain buffers (converter side, before the next tick).
-        void framePainted();
-
         /// Runs for grain `index` (the current index when the thread woke). Indexes since the
         /// last run that were not handled are committed as repeats first.
         void run(std::uint64_t index, PageState state);
@@ -59,7 +56,6 @@ namespace mbs::engine
     private:
         TickActions& _actions;
         TickCounters _counters;
-        std::atomic<bool> _painted{false}; // set by the converter side, taken by the tick
         bool _started = false;
         std::uint64_t _last = 0;
     };

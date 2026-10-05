@@ -3,11 +3,6 @@
 
 namespace mbs::engine
 {
-    void Tick::framePainted()
-    {
-        _painted.store(true, std::memory_order_release);
-    }
-
     void Tick::run(std::uint64_t index, PageState state)
     {
         if (_started && index <= _last)
@@ -20,7 +15,7 @@ namespace mbs::engine
         {
             for (std::uint64_t k = _last + 1; k < index; ++k)
             {
-                _actions.commit(k, false);
+                _actions.commit(k, state);
                 _actions.writeAudio(k);
                 ++_counters.missed;
                 ++_counters.grains;
@@ -29,8 +24,7 @@ namespace mbs::engine
         _started = true;
         _last = index;
 
-        bool const fresh = _painted.exchange(false, std::memory_order_acq_rel);
-        _actions.commit(index, fresh);
+        bool const fresh = _actions.commit(index, state);
         ++_counters.grains;
         if (!fresh)
         {
@@ -40,6 +34,7 @@ namespace mbs::engine
         if (state != PageState::Crashed)
         {
             _actions.requestFrame();
+            ++_counters.beginFrames;
         }
     }
 }

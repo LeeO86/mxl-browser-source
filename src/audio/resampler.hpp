@@ -42,6 +42,9 @@ namespace mbs::audio
         /// Starts over: drops what the FIFO holds and waits for the target fill again.
         void reset(Fifo& fifo);
 
+        /// A new fill target (BROWSER_AV_OFFSET_MS changed); starts over like reset().
+        void setTarget(Fifo& fifo, std::size_t targetFrames);
+
         [[nodiscard]] ResamplerStats const& stats() const { return _stats; }
 
     private:

@@ -57,6 +57,12 @@ namespace mbs::audio
         _stats.resets--; // a requested start-over is not an out-of-range reset
     }
 
+    void Resampler::setTarget(Fifo& fifo, std::size_t targetFrames)
+    {
+        _target = static_cast<double>(targetFrames);
+        reset(fifo);
+    }
+
     void Resampler::produce(Fifo& fifo, float* out, std::size_t frames, std::uint64_t nowNs)
     {
         _stats.samples += frames;
