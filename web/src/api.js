@@ -38,7 +38,9 @@ export function submitToken(value) {
   waiters.forEach((resolve) => resolve());
 }
 
-export const tokenSet = () => token !== "";
+/** Adds `?token=` for links that open outside this page (DevTools tab). */
+export const withToken = (url) =>
+  token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
 
 /** WebSocket URL on the page's own host; the token goes into the query. */
 export function wsUrl(path) {
