@@ -164,6 +164,13 @@ namespace mbs::util
         }
     }
 
+    std::array<std::uint8_t, 20> sha1(std::string_view data)
+    {
+        std::array<std::uint8_t, 20> out{};
+        sha1(reinterpret_cast<std::uint8_t const*>(data.data()), data.size(), out.data());
+        return out;
+    }
+
     Uuid uuidNamespaceDns()
     {
         return *parseUuid("6ba7b810-9dad-11d1-80b4-00c04fd430c8");

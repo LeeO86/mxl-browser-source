@@ -33,4 +33,7 @@ namespace mbs::util
 
     /// DNS namespace from RFC 4122 Appendix C (`6ba7b810-9dad-11d1-80b4-00c04fd430c8`).
     Uuid uuidNamespaceDns();
+
+    /// SHA-1 digest (also the WebSocket handshake's).
+    std::array<std::uint8_t, 20> sha1(std::string_view data);
 }
