@@ -65,14 +65,17 @@ The image builds (2.2 GB uncompressed) and starts; `/readyz` turns 200 when the 
 | GPU mode | WebGL reports `ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)`; 995 of 1002 consecutive, 3 repeats; 0.98 cores |
 | `tone.html` | −20.01 dBFS on both channels; FIFO 61 ms, drift 13 ppm, no underruns at steady state |
 | `avsync.html`, 3 grains video delay | first 87 ms: the FIFO held 121 ms after the stream start and the controller needed minutes at 500 ppm. Priming now ends at the target exactly (the excess is dropped): 16 ms after the start, 21.6 ms (17–25) at steady state |
+| `avsync.html`, auto delay (GPU 4, software 5 grains) | GPU +1.1 ms (−4.0…+6.5), software +1.0 ms (−2.9…+5.2), 20 of 20 bursts each |
+| `bars.html`, `transparency.html` (both modes) | all eight bars exactly the BT.709 10-bit values (e.g. yellow 877/64/553); alpha 0/25/50/75/100 % → 0/257/514/766/1023, fill straight (white stays 940 at any alpha) |
+| `interact.html` via `/api/v1/interact` (both modes) | click, keys, text `ü你`, wheel reported by the page within 3.6 s; an observer's input is refused (`not_controller`). The wheel scrolled the wrong way (CEF's sign is the opposite of the DOM's); fixed |
 
 All conversion changes produce the same bytes as before (unit tests against the previous packers at 19 widths, AVX2 against scalar on runs of opaque and transparent pixels, bands against one pass).
 
 More decisions:
 - **Late paints.** A paint carries no frame id and an unchanged page answers no BeginFrame, so pairing a paint with "its" BeginFrame drifts off by a period after one unanswered BeginFrame (the first run counted nearly every paint as late). `late_paints_total` now counts paints that were never committed because a newer one arrived before the tick; `paint_latency_seconds` is measured from the newest BeginFrame.
-- **Auto video delay.** Chromium's own audio path measured about 40 ms (GPU mode): `BROWSER_VIDEO_DELAY_GRAINS=auto` = round((audio buffer + 40 ms − lead·P) / P), 4 grains at 1080p50.
+- **Auto video delay.** Measured with `avsync.html`: Chromium's own audio path adds about 60 ms, and GPU mode adds one period to the video (the compositor's extra frame). `BROWSER_VIDEO_DELAY_GRAINS=auto` = round((audio buffer + 60 ms − (lead + 1 in GPU mode)·P) / P): 4 grains at 1080p50 in GPU mode, 5 in software mode.
 - **Logs.** Chromium logs to stderr and to `log_file`; `log_file` is `/dev/null`, otherwise every line appears twice. Chromium's D-Bus errors at start (no bus in the container) are harmless.
 
 Next, in order:
-1. A/V check with the new auto delay in GPU and software mode; colour and key values (`bars.html`, `transparency.html`), interaction from the UI, template calls, crash and hang recovery, DevTools through the tunnel, SIGTERM (143, node deregistered, domain removed).
+1. Template calls, crash and hang recovery, DevTools through the tunnel, SIGTERM (143, node deregistered, domain removed).
 2. Image size (fonts-noto-cjk is large), Compose files, Kubernetes examples, Grafana dashboard, integration tests in CI, the G1–G14 table, 1 h soak, release 1.0.0.
