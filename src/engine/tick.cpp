@@ -30,37 +30,16 @@ namespace mbs::engine
         _last = index;
 
         bool const fresh = _painted.exchange(false, std::memory_order_acq_rel);
-        if (fresh)
-        {
-            _outstanding = false;
-        }
         _actions.commit(index, fresh);
         ++_counters.grains;
         if (!fresh)
         {
-            if (state == PageState::Ready && _outstanding)
-            {
-                ++_counters.repeatedLate;
-            }
-            else
-            {
-                ++_counters.repeatedHold;
-            }
+            ++(state == PageState::Ready ? _counters.repeated : _counters.repeatedHold);
         }
         _actions.writeAudio(index);
-
-        if (state == PageState::Crashed)
+        if (state != PageState::Crashed)
         {
-            _outstanding = false; // no renderer: nothing will paint until the reload
-            return;
+            _actions.requestFrame();
         }
-        if (_outstanding)
-        {
-            // A late page skips a BeginFrame instead of falling behind.
-            ++_counters.beginFramesSkipped;
-            return;
-        }
-        _actions.requestFrame();
-        _outstanding = true;
     }
 }

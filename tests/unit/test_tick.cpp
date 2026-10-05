@@ -28,45 +28,45 @@ namespace
     };
 }
 
-TEST_CASE("a page that keeps up gets one BeginFrame per grain and every grain is fresh")
+TEST_CASE("every tick commits one grain, writes its audio and sends one BeginFrame")
 {
     Recorder actions;
     Tick tick(actions);
-    tick.run(100, PageState::Ready); // nothing painted yet: hold, first request
+    tick.run(100, PageState::Ready); // nothing painted yet
     for (std::uint64_t k = 101; k < 111; ++k)
     {
         tick.framePainted();
         tick.run(k, PageState::Ready);
     }
     CHECK(actions.requests == 11);
-    CHECK(actions.commits.size() == 11);
+    REQUIRE(actions.commits.size() == 11);
+    CHECK_FALSE(actions.commits[0].fresh);
     for (std::size_t i = 1; i < actions.commits.size(); ++i)
     {
         CHECK(actions.commits[i].fresh);
     }
-    CHECK(tick.counters().repeatedLate == 0);
-    CHECK(tick.counters().beginFramesSkipped == 0);
+    CHECK(tick.counters().repeated == 1);
     CHECK(actions.audio.size() == 11);
 }
 
-TEST_CASE("a late paint repeats one grain and skips one BeginFrame")
+TEST_CASE("an unchanged or late page repeats the frame but is still asked every tick")
 {
     Recorder actions;
     Tick tick(actions);
+    tick.framePainted();
     tick.run(1, PageState::Ready);
+    // A static page answers BeginFrames with no paint: the frame repeats, and a later change
+    // is still picked up because every tick sends a BeginFrame.
+    for (std::uint64_t k = 2; k < 6; ++k)
+    {
+        tick.run(k, PageState::Ready);
+    }
+    CHECK(tick.counters().repeated == 4);
+    CHECK(actions.requests == 5);
     tick.framePainted();
-    tick.run(2, PageState::Ready);
-    // The paint for grain 3 is late: grain 3 repeats, no second BeginFrame is sent.
-    tick.run(3, PageState::Ready);
-    CHECK_FALSE(actions.commits.back().fresh);
-    CHECK(tick.counters().repeatedLate == 1);
-    CHECK(tick.counters().beginFramesSkipped == 1);
-    CHECK(actions.requests == 2);
-    // It arrives before grain 4: used there, and the page is asked again.
-    tick.framePainted();
-    tick.run(4, PageState::Ready);
+    tick.run(6, PageState::Ready);
     CHECK(actions.commits.back().fresh);
-    CHECK(actions.requests == 3);
+    CHECK(actions.requests == 6);
 }
 
 TEST_CASE("indexes the thread woke too late for are committed as repeats")
@@ -89,17 +89,18 @@ TEST_CASE("indexes the thread woke too late for are committed as repeats")
     CHECK(actions.commits.size() == 5);
 }
 
-TEST_CASE("loading and crashed pages hold the frame; a crash clears the outstanding BeginFrame")
+TEST_CASE("loading and crashed pages hold the frame; a crashed page gets no BeginFrame")
 {
     Recorder actions;
     Tick tick(actions);
     tick.run(1, PageState::Loading);
     tick.run(2, PageState::Loading);
     CHECK(tick.counters().repeatedHold == 2);
-    tick.run(3, PageState::Crashed);
-    CHECK_FALSE(tick.outstanding());
-    tick.run(4, PageState::Crashed);
-    CHECK(actions.requests == 1);
-    tick.run(5, PageState::Ready);
     CHECK(actions.requests == 2);
+    tick.run(3, PageState::Crashed);
+    tick.run(4, PageState::Crashed);
+    CHECK(actions.requests == 2);
+    CHECK(tick.counters().repeatedHold == 4);
+    tick.run(5, PageState::Ready);
+    CHECK(actions.requests == 3);
 }
