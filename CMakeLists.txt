@@ -139,6 +139,9 @@ if(MBS_WITH_CEF)
     set_source_files_properties(src/nmos/node.cpp PROPERTIES COMPILE_OPTIONS "-w")
     set_target_properties(mxl-browser-source PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
 
+    add_executable(grain_reader tests/tools/grain_reader.cpp)
+    target_link_libraries(grain_reader PRIVATE mxl::mxl Threads::Threads)
+
     add_executable(mxl-browser-source-helper helper/main.cpp)
     target_link_libraries(mxl-browser-source-helper PRIVATE mbs-cef)
     set_target_properties(mxl-browser-source-helper PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")

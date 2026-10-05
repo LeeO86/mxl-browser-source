@@ -694,7 +694,7 @@ namespace mbs::app
             // The renderer the page really gets (SPEC §5.5): WebGL's unmasked renderer string.
             std::lock_guard lock{_probeMutex};
             _rendererProbeId = _browser->devToolsMethod("Runtime.evaluate",
-                R"({"returnByValue":true,"expression":"(()=>{try{const g=document.createElement('canvas').getContext('webgl');if(!g)return 'none';const e=g.getExtension('WEBGL_debug_renderer_info');return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER));}catch(x){return 'error';}})()"})");
+                R"js({"returnByValue":true,"expression":"(()=>{try{const g=document.createElement('canvas').getContext('webgl');if(!g)return 'none';const e=g.getExtension('WEBGL_debug_renderer_info');return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER));}catch(x){return 'error';}})()"})js");
         }
         broadcastEvent(R"({"type":"page","state":"loaded","url":)" + json(url) + R"(,"title":)" + json(title) + "}");
     }

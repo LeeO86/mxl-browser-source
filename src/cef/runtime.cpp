@@ -564,7 +564,7 @@ namespace mbs::cef
         }
 
         // --- life span
-        bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int, CefString const& targetUrl, CefString const&, WindowOpenDisposition, bool,
+        bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int, CefString const& targetUrl, CefString const&, cef_window_open_disposition_t, bool,
             CefPopupFeatures const&, CefWindowInfo&, CefRefPtr<CefClient>&, CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override
         {
             auto impl = _impl.lock();

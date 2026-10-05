@@ -116,6 +116,7 @@ namespace mbs::cef
         void focus(bool focused) override;
 
     private:
+        friend class Client; // the CEF handlers (runtime.cpp)
         struct Impl;
         std::shared_ptr<Impl> _impl;
     };

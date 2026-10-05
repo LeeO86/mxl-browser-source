@@ -29,6 +29,7 @@
 #include "nmos/node_resource.h"
 #include "nmos/node_resources.h"
 #include "nmos/node_server.h"
+#include "nmos/query_utils.h"
 #include "nmos/rational.h"
 #include "nmos/server.h"
 #include "nmos/settings.h"

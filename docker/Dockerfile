@@ -35,7 +35,8 @@ RUN url="https://cef-builds.spotifycdn.com/cef_binary_$(echo "$CEF_VERSION" | se
     && ninja -C cef/build libcef_dll_wrapper \
     && rm -rf cef/build/libcef_dll_wrapper/CMakeFiles
 
-FROM ${UBUNTU} AS build
+# Everything the build needs except this repository (cached; also the incremental dev image).
+FROM ${UBUNTU} AS deps
 ARG MXL_REF=218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
 ARG NMOS_CPP_REF=fe303849527394b03bdedc8f161f377fe458bb62
 ARG EXTRA_CA_CERT_B64=""
@@ -72,8 +73,17 @@ RUN git init /opt/nmos-cpp \
     && git -C /opt/nmos-cpp remote add origin https://github.com/sony/nmos-cpp.git \
     && git -C /opt/nmos-cpp fetch --depth 1 origin "${NMOS_CPP_REF}" \
     && git -C /opt/nmos-cpp checkout FETCH_HEAD
-
 COPY --from=cef /opt/cef /opt/cef
+# libcef.so is linked against these (the link resolves its dependencies).
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 libxkbcommon0 \
+        libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libxshmfence1 libasound2t64 libpango-1.0-0 \
+        libcairo2 libx11-6 libx11-xcb1 libxcb1 libdbus-1-3 libexpat1 libglib2.0-0t64 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM deps AS build
+ARG MXL_REF=218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
+ARG NMOS_CPP_REF=fe303849527394b03bdedc8f161f377fe458bb62
 COPY . /src
 COPY --from=webui /web/dist /src/web/dist
 RUN cmake -S /src -B /src/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -100,6 +110,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY --from=cef /opt/cef/Release/ /usr/local/lib/mxl-browser-source/
 COPY --from=cef /opt/cef/Resources/ /usr/local/lib/mxl-browser-source/
 COPY --from=build /src/build/mxl-browser-source /src/build/mxl-browser-source-helper /src/build/libmallinfo_shim.so /usr/local/lib/mxl-browser-source/
+COPY --from=build /src/build/grain_reader /usr/local/bin/mxl-bs-grain-reader
 COPY --from=build /opt/mxl/lib/ /usr/local/lib/
 COPY --from=build /tmp/mxl/build/vcpkg_installed/x64-linux/lib/ /usr/local/lib/
 COPY templates/ /usr/local/share/mxl-browser-source/templates/

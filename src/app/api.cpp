@@ -11,6 +11,7 @@
 #include <regex>
 #include <sstream>
 
+#include "app/mxladapters.hpp"
 #include "include/cef_version.h"
 #include "mxlio/setup.hpp"
 #include "nmos/node.hpp"
