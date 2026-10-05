@@ -4,6 +4,8 @@
 //   grain_reader counter --domain DIR --flow UUID --width W --seconds S
 //     Decodes counter.html's 32-bit bar code (top 16 lines, bit i = 60 px block) from every
 //     grain and reports advances (+1), repeats (+0) and skips (> +1).
+//   grain_reader sample --domain DIR --flow UUID --width W --height H --x X --y Y
+//     Y, Cb, Cr (and the v210a alpha) of one pixel of the newest grain.
 //   grain_reader avsync --domain DIR --video UUID --audio UUID --width W --rate N/D --seconds S
 //     Finds avsync.html's white flashes (grains) and tone bursts (channel 1) and prints the
 //     offset of each burst against its flash (positive: audio late).
@@ -60,6 +62,46 @@ namespace
         int const s[6] = {static_cast<int>((w[0] >> 10) & 0x3ff), static_cast<int>(w[1] & 0x3ff), static_cast<int>((w[1] >> 20) & 0x3ff),
             static_cast<int>((w[2] >> 10) & 0x3ff), static_cast<int>(w[3] & 0x3ff), static_cast<int>((w[3] >> 20) & 0x3ff)};
         return s[x % 6];
+    }
+
+    // Y, Cb, Cr (10 bit) and, for v210a, the alpha (10 bit) of pixel (x, y) in the newest grain.
+    int sample(mxlInstance instance, std::string const& flow, int width, int height, int x, int y)
+    {
+        auto* reader = openReader(instance, flow);
+        if (reader == nullptr)
+        {
+            std::fprintf(stderr, "no reader for %s\n", flow.c_str());
+            return 1;
+        }
+        mxlGrainInfo info{};
+        std::uint8_t* payload = nullptr;
+        auto const index = headIndex(reader);
+        if (mxlFlowReaderGetGrain(reader, index, 200'000'000, &info, &payload) != MXL_STATUS_OK || payload == nullptr)
+        {
+            std::fprintf(stderr, "no grain\n");
+            return 1;
+        }
+        std::size_t const rowBytes = static_cast<std::size_t>((width + 47) / 48) * 128;
+        auto const* line = payload + static_cast<std::size_t>(y) * rowBytes;
+        std::uint32_t w[4];
+        std::memcpy(w, line + static_cast<std::size_t>(x / 6) * 16, sizeof(w));
+        // Cb0 Y0 Cr0 | Y1 Cb1 Y2 | Cr1 Y3 Cb2 | Y4 Cr2 Y5: chroma of the pixel pair
+        int const pair = (x % 6) / 2;
+        int const cbs[3] = {static_cast<int>(w[0] & 0x3ff), static_cast<int>((w[1] >> 10) & 0x3ff), static_cast<int>((w[2] >> 20) & 0x3ff)};
+        int const crs[3] = {static_cast<int>((w[0] >> 20) & 0x3ff), static_cast<int>(w[2] & 0x3ff), static_cast<int>((w[3] >> 10) & 0x3ff)};
+        std::printf("x=%d y=%d Y=%d Cb=%d Cr=%d", x, y, luma(line, x), cbs[pair], crs[pair]);
+        // v210a: the alpha plane follows the fill (three 10-bit samples per word).
+        std::size_t const alphaRow = static_cast<std::size_t>((width + 2) / 3) * 4;
+        std::size_t const fillBytes = rowBytes * static_cast<std::size_t>(height);
+        if (info.grainSize >= fillBytes + alphaRow * static_cast<std::size_t>(height))
+        {
+            std::uint32_t a = 0;
+            std::memcpy(&a, payload + fillBytes + static_cast<std::size_t>(y) * alphaRow + static_cast<std::size_t>(x / 3) * 4, 4);
+            std::printf(" A=%u", (a >> (10 * (x % 3))) & 0x3ff);
+        }
+        std::printf("\n");
+        mxlReleaseFlowReader(instance, reader);
+        return 0;
     }
 
     int counter(mxlInstance instance, std::string const& flow, int width, int seconds)
@@ -265,9 +307,9 @@ int main(int argc, char** argv)
     auto const domain = arg(argc, argv, "--domain", "");
     int const width = std::stoi(arg(argc, argv, "--width", "1920"));
     int const seconds = std::stoi(arg(argc, argv, "--seconds", "20"));
-    if (domain.empty() || (mode != "counter" && mode != "avsync"))
+    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample"))
     {
-        std::fprintf(stderr, "usage: grain_reader counter|avsync --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20]\n");
+        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20]\n");
         return 2;
     }
     auto* instance = mxlCreateInstance(domain.c_str(), nullptr);
@@ -280,6 +322,11 @@ int main(int argc, char** argv)
     if (mode == "counter")
     {
         rc = counter(instance, arg(argc, argv, "--flow", ""), width, seconds);
+    }
+    else if (mode == "sample")
+    {
+        rc = sample(instance, arg(argc, argv, "--flow", ""), width, std::stoi(arg(argc, argv, "--height", "1080")), std::stoi(arg(argc, argv, "--x", "0")),
+            std::stoi(arg(argc, argv, "--y", "0")));
     }
     else
     {

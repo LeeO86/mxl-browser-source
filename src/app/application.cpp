@@ -223,6 +223,19 @@ namespace mbs::app
         {
             throw StartupError(78, "NMOS_HOST_ADDRESS: no non-loopback IPv4 address found, set it");
         }
+        // The render mode is known before the engine: the video delay depends on it.
+        if (_cfg.render == config::Render::Gpu)
+        {
+            _renderRequested = cef::RenderMode::Gpu;
+        }
+        else if (_cfg.render == config::Render::Auto)
+        {
+            _renderRequested = gpuVisible() ? cef::RenderMode::Gpu : cef::RenderMode::Software;
+            if (_renderRequested == cef::RenderMode::Software)
+            {
+                log::warn("render_software_fallback", {{"reason", "no NVIDIA GPU visible (/dev/nvidia*, libEGL_nvidia.so.0)"}});
+            }
+        }
     }
 
     void Application::prepareMxl()
@@ -319,11 +332,12 @@ namespace mbs::app
         else
         {
             // auto (SPEC §6): audio reaches MXL after the FIFO target plus Chromium's own audio path,
-            // video after the BeginFrame lead; delay video by the difference. Chromium's path measured
-            // with avsync.html on the lab: about 40 ms (2026-10-05, 1080p50, GPU mode).
-            constexpr double kChromiumAudioMs = 40.0;
+            // video after the BeginFrame lead, one period more with GPU compositing (its paint shows
+            // the previous frame); delay video by the difference. Measured with avsync.html on the lab
+            // (2026-10-05, 1080p50): Chromium's audio path about 60 ms.
+            constexpr double kChromiumAudioMs = 60.0;
             double const audioMs = _cfg.audioChannels > 0 ? _cfg.audioBufferMs + kChromiumAudioMs : 0.0;
-            double const videoMs = periodMs * _cfg.frameLead;
+            double const videoMs = periodMs * (_cfg.frameLead + (_renderRequested == cef::RenderMode::Gpu ? 1 : 0));
             es.videoDelayGrains = static_cast<std::uint32_t>(std::max(0L, std::lround((audioMs - videoMs) / periodMs)));
         }
         switch (_cfg.onPageError)
@@ -401,18 +415,6 @@ namespace mbs::app
 
     void Application::startCef()
     {
-        if (_cfg.render == config::Render::Gpu)
-        {
-            _renderRequested = cef::RenderMode::Gpu;
-        }
-        else if (_cfg.render == config::Render::Auto)
-        {
-            _renderRequested = gpuVisible() ? cef::RenderMode::Gpu : cef::RenderMode::Software;
-            if (_renderRequested == cef::RenderMode::Software)
-            {
-                log::warn("render_software_fallback", {{"reason", "no NVIDIA GPU visible (/dev/nvidia*, libEGL_nvidia.so.0)"}});
-            }
-        }
         cef::RuntimeSettings rs;
         rs.argc = _argc;
         rs.argv = _argv;

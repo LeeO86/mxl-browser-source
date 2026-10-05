@@ -313,7 +313,7 @@ Client → server (JSON Schema, draft 2020-12, abbreviated; the full schema is `
       "modifiers": {"$ref": "#/$defs/modifiers"}, "seq": {"type": "integer"}}},
     {"type": "object", "required": ["type", "x", "y", "dx", "dy"], "properties": {
       "type": {"const": "wheel"}, "x": {"type": "number"}, "y": {"type": "number"},
-      "dx": {"type": "number"}, "dy": {"type": "number"},
+      "dx": {"type": "number"}, "dy": {"type": "number", "description": "pixels, DOM sign: positive scrolls down (dx: right)"},
       "modifiers": {"$ref": "#/$defs/modifiers"}, "seq": {"type": "integer"}}},
     {"type": "object", "required": ["type", "action", "code"], "properties": {
       "type": {"const": "key"}, "action": {"enum": ["down", "up"]},

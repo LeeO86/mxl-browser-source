@@ -114,7 +114,7 @@ Server → client only: `{"type":"status",…}` (4 Hz), `{"type":"dialog","kind"
 
 ## WebSocket `/api/v1/interact`
 
-The interaction protocol of SPEC §7.2 (schema: `docs/interact.schema.json`).
+The interaction protocol of SPEC §7.2 (schema there).
 
 Client → server (JSON text frames):
 
@@ -147,7 +147,7 @@ Server → client:
 {"type":"error","code":"not_controller","message":"interaction is off for this session"}
 ```
 
-Binary frames: 8-byte little-endian grain index, then a JPEG (the preview). `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture.
+Binary frames: 8-byte little-endian grain index, then a JPEG (the preview). `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down).
 
 ## DevTools (`BROWSER_DEVTOOLS=true` only)
 

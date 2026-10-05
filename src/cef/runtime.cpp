@@ -1134,7 +1134,8 @@ namespace mbs::cef
                 event.x = x;
                 event.y = y;
                 event.modifiers = modifiers;
-                host->SendMouseWheelEvent(event, dx, dy);
+                // The API uses the DOM sign (positive dy scrolls down); CEF the opposite.
+                host->SendMouseWheelEvent(event, -dx, -dy);
             }
         });
     }
