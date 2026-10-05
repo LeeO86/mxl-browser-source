@@ -1,6 +1,6 @@
 # mxl-browser-source — Specification
 
-Status: Draft v0.1 (for implementation in this repository; no code yet)
+Status: v0.9 (implemented in this repository; spike results folded in, deviations in IMPLEMENTATION_PLAN.md)
 Repository: `LeeO86/mxl-browser-source`
 Sibling projects this spec aligns with: `LeeO86/mxl-multiviewer`, `LeeO86/mxl-test-player`, `LeeO86/mxl-webrtc-monitor`, `LeeO86/mxl-decklink`, and the platform meta repo `mmz-srf/mxl-poc-platform`
 Functional inspiration: the OBS Browser Source and its "Interact" window (`obsproject/obs-browser`), the CasparCG HTML producer and its template API (`CasparCG/server`, `src/modules/html`)
@@ -112,17 +112,18 @@ Definitions: P is the grain period of the format, T(k) the TAI start of grain in
 The tick thread runs once per index:
 
 1. Sleep until T(k) + ε.
-2. **Commit grain k.** If a paint arrived since the previous tick, the converter has produced its grain buffers; copy them into MXL grain k (`mxlFlowWriterOpenGrain`, all slices valid, `CommitGrain`) for the video flow, and the key flow in `fill_key`. If no paint arrived, commit the last converted frame again and count it: `repeated_grains_total{reason="late"}` when a BeginFrame was outstanding, `{reason="hold"}` while the page is loading, crashed or hung (§13).
+2. **Commit grain k.** If a paint arrived since the previous tick, the converter has produced its grain buffers; copy them into MXL grain k (`mxlFlowWriterOpenGrain`, all slices valid, `CommitGrain`) for the video flow, and the key flow in `fill_key`. If no paint arrived, commit the last converted frame again and count it: `repeated_grains_total{reason="late"}` for a ready page (unchanged or late), `{reason="hold"}` while the page is loading, crashed or hung (§13).
 3. **Write audio** samples for the interval of grain k (§6).
-4. **Request the next frame.** If no BeginFrame is outstanding, post to the UI thread: `Invalidate(PET_VIEW)` then `SendExternalBeginFrame()`, and mark it outstanding. If one is still outstanding, send none and count `begin_frames_skipped_total`.
+4. **Request the next frame:** post one `SendExternalBeginFrame()` to the UI thread, on every tick (none while the renderer is gone).
 5. If the thread woke after T(k+1), the indexes in between are committed as repeats and counted as `missed_grains_total` (the writer never leaves a gap in the ring).
+
+Spike S2 (IMPLEMENTATION_PLAN.md §2) settled the BeginFrame semantics of CEF 144: one BeginFrame gives exactly one `OnPaint` when the page changed and none when it did not, and `Invalidate(PET_VIEW)` produces an immediate extra paint of the current frame. So there is no `Invalidate` per frame and no "outstanding BeginFrame" state: a static page never answers, which an outstanding rule would mistake for a stall. `Invalidate` is sent only after a load, a resize and a source change, so that a static page paints once.
 
 Consequences:
 
-- Exactly one BeginFrame per grain index while the page keeps up. The page's `requestAnimationFrame` timestamps and CSS animations advance in steps of P, so animations are frame-locked to house time.
-- Latency from the page state to MXL is one period (BeginFrame at about T(k−1), grain at T(k)) plus the conversion. `BROWSER_FRAME_LEAD` (default 1) MAY raise the lead to 2 periods for heavy pages.
-- **Late paint:** a paint that arrives after the tick of its grain is used at the next tick. The grain in between repeats the previous frame, and because only one BeginFrame is ever outstanding, the page skips one BeginFrame instead of falling behind. Nothing is queued, so a late page recovers on the next frame.
-- `Invalidate(PET_VIEW)` before every BeginFrame is required because Chromium does not paint a frame without damage: a BeginFrame on an unchanged page produces no `OnPaint` (CEF issue 2800), which would be indistinguishable from a late page. **(spike S2)** measures whether one Invalidate + BeginFrame yields exactly one `OnPaint`, the latency distribution (BeginFrame → `OnPaint`), and incomplete first frames after navigation (CEF issue 4166).
+- Exactly one BeginFrame per grain index. The page's `requestAnimationFrame` runs once per BeginFrame (spike S2: 1225 callbacks for about 1250 BeginFrames), so its timestamps and CSS animations advance in steps of P: animations are frame-locked to house time.
+- Latency from the page state to MXL is one period (BeginFrame at about T(k−1), grain at T(k)) plus the conversion, plus the video delay of §6.
+- **Late paint:** a paint that arrives after the tick of its grain is used at the next tick; the grain in between repeats the previous frame. Only the newest paint is kept, so a late page recovers on the next frame. A paint more than one period after its BeginFrame counts in `late_paints_total` (`paint_latency_seconds` has the distribution).
 - `windowless_frame_rate` is set to the format's rate (rounded up); with `external_begin_frame_enabled` it only caps internal scheduling.
 - 59.94/29.97 use the MXL rational rate; index arithmetic is MXL's (128-bit rounding as in the multiviewer).
 
@@ -254,10 +255,10 @@ The last converted grain buffers are kept. A repeat copies them into the new gra
 
 `BROWSER_RENDER=auto|gpu|software` (default `auto`):
 
-- `gpu`: Chromium with ANGLE on the NVIDIA GPU. CEF 144 rejects `--use-gl=egl` (Strom), so the backend is chosen by **(spike S1)** in this order: (1) ANGLE on EGL without X (`--ozone-platform=headless --use-gl=angle --use-angle=gl-egl` on the EGL device of the NVIDIA driver), (2) ANGLE on Vulkan (`--use-angle=vulkan`, proven in Strom under Xvfb; needs the NVIDIA Vulkan ICD and `NVIDIA_DRIVER_CAPABILITIES` including `graphics`), plus `--enable-gpu-rasterization --ignore-gpu-blocklist`. The chosen flags are recorded in `IMPLEMENTATION_PLAN.md`.
+- `gpu`: Chromium with ANGLE on the NVIDIA GPU. CEF 144 rejects `--use-gl=egl` (Strom). Spike S1 chose ANGLE on EGL without X: `--ozone-platform=headless --use-gl=angle --use-angle=gl-egl --enable-gpu-rasterization --ignore-gpu-blocklist`, with the glvnd vendor file `10_nvidia.json` in the image (the container toolkit injects the library but not the file; without it EGL silently falls back to llvmpipe). ANGLE on Vulkan rendered, but answered 29 of 1000 BeginFrames with no or two paints.
 - `software`: `--disable-gpu --disable-gpu-compositing --use-gl=disabled` (with `--disable-gpu` alone Chromium still starts a GPU process that probes the driver and crashed in Strom). Documented fallback, not normal operation: it costs CPU per animated page and is the mode for hosts without a GPU and for CI.
 - `auto`: `gpu` when a GPU is visible (`/dev/nvidia*` and `libcuda`/`libEGL_nvidia` load), else `software` with the warning `render_software_fallback` and the metric `render_mode{mode="software"} 1`.
-- The process MUST report the mode Chromium really uses (GPU feature status through `ExecuteDevToolsMethod("SystemInfo.getInfo")`) **(spike S1)**, not only the requested one.
+- The process MUST report the mode Chromium really uses, not only the requested one. `SystemInfo.getInfo` belongs to the browser target, which `ExecuteDevToolsMethod` does not reach; after the first load the process asks the page instead (`Runtime.evaluate` of WebGL's unmasked renderer string): no WebGL, SwiftShader or llvmpipe is `software`, anything else `gpu`. GPU requested and software found is `render_degraded`.
 - Target hardware: NVIDIA RTX A4000 (small platform) and L4 (fat platform); the lab's A16 is the interim test GPU.
 
 ### 5.6 Formats
@@ -274,7 +275,7 @@ The last converted grain buffers are kept. A repeat copies them into the new gra
 - Output: MXL continuous flow, `audio/float32`, 48 kHz, the configured channel count, planar, written by sample index derived from TAI (`mxlFlowWriterOpenSamples`/`CommitSamples`; two fragments on a ring wrap). 1080p50 writes 960 samples per tick; 59.94 alternates by the exact sample index of T(k).
 - Channel mapping: page channels beyond the flow's count are dropped, missing ones are silent (the multiviewer's rule). A stereo page into an 8-channel flow fills channels 1–2.
 - **Silence:** with no stream (no audio element, stream stopped, page loading or crashed, `audio=false`) the flow carries zeros at the same cadence; the flow never stops while the sender is enabled.
-- **A/V alignment:** video reaches MXL one period (`BROWSER_FRAME_LEAD`) after the page state; audio after the FIFO target plus Chromium's buffer. The video is delayed by whole grains (`BROWSER_VIDEO_DELAY_GRAINS`, default `auto` = round((audio latency − video latency)/P), ≥ 0) and audio is trimmed by `BROWSER_AV_OFFSET_MS` (default 0, positive delays audio). Target: |offset| ≤ 1 frame, measured with the A/V test page (§17). The packet `pts` is mapped to TAI at stream start to place the first samples **(spike S4)**.
+- **A/V alignment:** video reaches MXL one period (`BROWSER_FRAME_LEAD`) after the page state; audio after the FIFO target plus Chromium's buffer. The video is delayed by whole grains (`BROWSER_VIDEO_DELAY_GRAINS`, default `auto` = round((audio latency − video latency)/P), ≥ 0) and audio is trimmed by `BROWSER_AV_OFFSET_MS` (default 0, positive delays audio). Target: |offset| ≤ 1 frame, measured with the A/V test page (§17). Spike S4: packets are 480 frames (10 ms) and their `pts` follows `CLOCK_MONOTONIC` exactly, so a stream starts from an empty FIFO that fills to the target before samples are taken (silence until then); the packet `pts` is not needed to place samples.
 
 ## 7. Interaction and preview
 
@@ -533,10 +534,10 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_AUDIO_BUFFER_MS` | 60 | yes | FIFO target |
 | `BROWSER_AV_OFFSET_MS` | 0 | no | audio trim, positive delays audio |
 | `BROWSER_VIDEO_DELAY_GRAINS` | `auto` | yes | §6 |
-| `BROWSER_FRAME_LEAD` | 1 | yes | BeginFrame lead in periods (1–2) |
+| `BROWSER_FRAME_LEAD` | 1 | yes | video latency in periods that `BROWSER_VIDEO_DELAY_GRAINS=auto` assumes (1–2); a paint is always committed at the first tick after it arrives |
 | `BROWSER_RENDER` | `auto` | yes | `auto`, `gpu`, `software` |
 | `BROWSER_ON_PAGE_ERROR` | `hold` | no | `hold`, `transparent`, `black`, `slate` |
-| `BROWSER_HANG_TIMEOUT_MS` | 3000 | no | no paint for this long → hang (§13) |
+| `BROWSER_HANG_TIMEOUT_MS` | 3000 | no | the renderer does not answer a liveness probe for this long → hang (§13) |
 | `BROWSER_MAX_RESIDENT_MB` | 0 | no | CEF processes' memory warning threshold, 0 = off (§13) |
 | `BROWSER_POPUPS` | `block` | no | `block`, `same_window` |
 | `BROWSER_CONFIRM_DIALOGS` | `cancel` | no | `cancel`, `accept` |
@@ -567,7 +568,7 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `repeated_grains_total` | counter | `reason` (`late`, `hold`) |
 | `missed_grains_total` | counter | – |
 | `begin_frames_total` | counter | – |
-| `begin_frames_skipped_total` | counter | – |
+| `late_paints_total` | counter | – (paints more than one period after their BeginFrame) |
 | `paint_latency_seconds` | histogram | – (BeginFrame posted → `OnPaint`) |
 | `convert_seconds` | histogram | – |
 | `commit_lateness_seconds` | histogram | – (commit time − T(k)) |
@@ -603,7 +604,7 @@ Startup order: parse and validate settings (78) → check the MXL root is tmpfs 
 | Failure | Detection | Behaviour | Recovery |
 | --- | --- | --- | --- |
 | Renderer crash | `OnRenderProcessTerminated` | output holds the last frame (or per `BROWSER_ON_PAGE_ERROR`), audio silent, `renderer_crashes_total` | reload after 1 s, then 2, 5, 10, 30 s backoff; state `crashed` until loaded; after 5 crashes in 10 min state `error` and no automatic reload until an operator reloads |
-| Page hang (JS loop) | no `OnPaint` for `BROWSER_HANG_TIMEOUT_MS` with BeginFrames outstanding, or `OnRenderProcessUnresponsive` | hold; `page_hangs_total` | terminate the renderer (`OnRenderProcessUnresponsive` callback, else close and recreate the browser) and continue as a crash |
+| Page hang (JS loop) | the renderer's main thread does not answer a DevTools `Runtime.evaluate("1")` probe (sent every second while the page is loaded) within `BROWSER_HANG_TIMEOUT_MS`, or `OnRenderProcessUnresponsive`. Missing paints cannot tell: a static page paints nothing | hold; `page_hangs_total` | terminate the renderer (`OnRenderProcessUnresponsive` callback, else close and recreate the browser) and continue as a crash |
 | GPU process crash / GPU lost | `gpu_process_crashes_total` from the log and missing paints | hold while Chromium restarts the GPU process | Chromium falls back to software compositing after repeated GPU crashes; the function reports the real mode (§5.5) and raises the alarm `render_degraded`; a restart of the pod returns to GPU mode |
 | Page load error | `OnLoadError` | per `BROWSER_ON_PAGE_ERROR` | retry with backoff when the source document says so (`reload_interval_s` or an operator reload) |
 | Memory growth | `cef_processes_resident_bytes` over `BROWSER_MAX_RESIDENT_MB` (default 0 = off) | warning event | optional automatic reload |

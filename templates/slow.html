@@ -1,0 +1,14 @@
+<!doctype html>
+<!-- Late paints (SPEC §17): an animation that blocks the main thread for 30 ms once a second. -->
+<html><head><meta charset="utf-8"><title>slow</title>
+<style>html,body{margin:0;height:100%;background:#000}#box{position:absolute;top:400px;width:100px;height:100px;background:#0f0}</style></head>
+<body><div id="box"></div><script>
+let x = 0, last = -1;
+function frame(t) {
+  x = (x + 8) % 1800; document.getElementById("box").style.left = x + "px";
+  const s = Math.floor(t / 1000);
+  if (s !== last) { last = s; const end = performance.now() + 30; while (performance.now() < end) {} }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

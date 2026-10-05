@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- Frame accuracy (SPEC §17): each requestAnimationFrame callback draws its counter as a
+     32-bit bar code in the top 16 lines (bit i = a 60 px wide block, white = 1, black = 0)
+     and as text. tests/tools/grain_reader decodes the bar code from every grain. -->
+<html><head><meta charset="utf-8"><title>counter</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c"></canvas>
+<script>
+const c = document.getElementById("c"), g = c.getContext("2d");
+c.width = innerWidth; c.height = innerHeight;
+let n = 0;
+function frame() {
+  g.fillStyle = "#000"; g.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < 32; i++) { g.fillStyle = (n >>> i) & 1 ? "#fff" : "#000"; g.fillRect(i * 60, 0, 60, 16); }
+  g.fillStyle = "#fff"; g.font = "120px DejaVu Sans Mono, monospace"; g.fillText(String(n), 80, 300);
+  g.fillRect((n * 8) % c.width, 400, 40, 200);
+  n++;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

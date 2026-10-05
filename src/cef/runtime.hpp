@@ -84,6 +84,8 @@ namespace mbs::cef
 
         /// Creates the browser (UI thread, asynchronous; onBrowserCreated follows).
         void create();
+        /// The URL create() opens (a browser created again after a hang opens the current page).
+        void setStartUrl(std::string const& url);
         /// Closes it (CloseBrowser(force)); onBrowserClosed follows.
         void close();
         [[nodiscard]] bool exists() const;

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
 project(mxl-browser-source
-    VERSION 0.1.0
+    VERSION 0.9.0
     DESCRIPTION "MXL media function: a web page rendered offscreen with CEF"
     LANGUAGES CXX
 )
@@ -70,4 +70,76 @@ if(MBS_BUILD_TESTS)
     )
     target_link_libraries(unit-tests PRIVATE mbs-core)
     add_test(NAME unit-tests COMMAND unit-tests)
+endif()
+
+# ------------------------------------------------------------------
+# The process: libmxl, nmos-cpp and CEF (SPEC §3). Built in docker/Dockerfile,
+# which provides CEF_ROOT (the minimal distribution with libcef_dll_wrapper
+# built in build/), MXL in CMAKE_PREFIX_PATH and NMOS_CPP_DIR.
+# ------------------------------------------------------------------
+option(MBS_WITH_CEF "Build mxl-browser-source and its helper (needs CEF_ROOT, MXL, nmos-cpp)" OFF)
+set(CEF_ROOT "" CACHE PATH "CEF binary distribution (include/, Release/, build/libcef_dll_wrapper/)")
+set(NMOS_CPP_DIR "" CACHE PATH "sony/nmos-cpp Development/")
+set(MBS_MXL_REVISION "unknown" CACHE STRING "MXL commit, reported in /api/v1/info")
+set(MBS_NMOS_CPP_REF "unknown" CACHE STRING "nmos-cpp commit, reported in /api/v1/info")
+
+if(MBS_WITH_CEF)
+    if(NOT CEF_ROOT OR NOT NMOS_CPP_DIR)
+        message(FATAL_ERROR "MBS_WITH_CEF=ON needs -DCEF_ROOT and -DNMOS_CPP_DIR")
+    endif()
+    find_package(mxl CONFIG REQUIRED)
+
+    add_library(cef_wrapper STATIC IMPORTED)
+    set_target_properties(cef_wrapper PROPERTIES IMPORTED_LOCATION ${CEF_ROOT}/build/libcef_dll_wrapper/libcef_dll_wrapper.a)
+    add_library(cef_lib SHARED IMPORTED)
+    set_target_properties(cef_lib PROPERTIES IMPORTED_LOCATION ${CEF_ROOT}/Release/libcef.so)
+    add_library(mbs-cef STATIC src/cef/runtime.cpp)
+    target_include_directories(mbs-cef PUBLIC ${CEF_ROOT})
+    target_link_libraries(mbs-cef PUBLIC mbs-core cef_wrapper cef_lib ${CMAKE_DL_LIBS})
+
+    add_library(mbs-mxl STATIC
+        src/mxlio/audiowriter.cpp
+        src/mxlio/domain.cpp
+        src/mxlio/flowdef.cpp
+        src/mxlio/videowriter.cpp
+    )
+    target_link_libraries(mbs-mxl PUBLIC mbs-core mxl::mxl)
+
+    # The web UI, prebuilt by the Dockerfile's webui stage, embedded as one page.
+    set(WEBUI_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/webui_index.hpp)
+    add_custom_command(
+        OUTPUT ${WEBUI_HEADER}
+        COMMAND ${CMAKE_COMMAND} -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/web/dist/index.html -DOUTPUT=${WEBUI_HEADER} -DVAR=IndexHtml
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
+        DEPENDS web/dist/index.html cmake/EmbedFile.cmake
+        COMMENT "Embedding the web UI"
+    )
+
+    # websocketpp (pulled in by nmos-cpp) does not parse as C++20.
+    set(NMOS_CPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(NMOS_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(NMOS_CPP_USE_SUPPLIED_JSON_SCHEMA_VALIDATOR ON CACHE BOOL "" FORCE)
+    set(NMOS_CPP_USE_SUPPLIED_JWT_CPP ON CACHE BOOL "" FORCE)
+    set(NMOS_CPP_USE_AVAHI OFF CACHE BOOL "" FORCE)
+    set(CMAKE_CXX_STANDARD 17)
+    add_subdirectory(${NMOS_CPP_DIR} ${CMAKE_BINARY_DIR}/nmos-cpp EXCLUDE_FROM_ALL)
+    set(CMAKE_CXX_STANDARD 20)
+
+    add_executable(mxl-browser-source
+        src/main.cpp
+        src/app/api.cpp
+        src/app/application.cpp
+        src/nmos/node.cpp
+        ${WEBUI_HEADER}
+    )
+    target_include_directories(mxl-browser-source PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_compile_definitions(mxl-browser-source PRIVATE MBS_MXL_REVISION="${MBS_MXL_REVISION}" MBS_NMOS_CPP_REF="${MBS_NMOS_CPP_REF}")
+    target_link_libraries(mxl-browser-source PRIVATE mbs-cef mbs-mxl nmos-cpp::nmos-cpp)
+    # nmos-cpp's headers warn a lot under -Wall.
+    set_source_files_properties(src/nmos/node.cpp PROPERTIES COMPILE_OPTIONS "-w")
+    set_target_properties(mxl-browser-source PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+
+    add_executable(mxl-browser-source-helper helper/main.cpp)
+    target_link_libraries(mxl-browser-source-helper PRIVATE mbs-cef)
+    set_target_properties(mxl-browser-source-helper PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
 endif()

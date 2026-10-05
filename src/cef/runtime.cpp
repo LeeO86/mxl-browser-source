@@ -906,10 +906,21 @@ namespace mbs::cef
             info.SetAsWindowless(kNullWindowHandle);
             info.external_begin_frame_enabled = true;
             CefBrowserSettings settings;
-            settings.windowless_frame_rate = std::clamp(impl->settings.frameRate, 1, 60);
-            settings.background_color = impl->settings.background;
-            CefBrowserHost::CreateBrowser(info, impl->client, impl->settings.url, settings, nullptr, nullptr);
+            std::string url;
+            {
+                std::lock_guard lock{impl->mutex};
+                settings.windowless_frame_rate = std::clamp(impl->settings.frameRate, 1, 60);
+                settings.background_color = impl->settings.background;
+                url = impl->settings.url;
+            }
+            CefBrowserHost::CreateBrowser(info, impl->client, url, settings, nullptr, nullptr);
         });
+    }
+
+    void Browser::setStartUrl(std::string const& url)
+    {
+        std::lock_guard lock{_impl->mutex};
+        _impl->settings.url = url;
     }
 
     void Browser::close()

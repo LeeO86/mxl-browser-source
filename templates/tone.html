@@ -1,0 +1,10 @@
+<!doctype html>
+<!-- A 1 kHz sine at -20 dBFS on both channels (SPEC §17 tone test). -->
+<html><head><meta charset="utf-8"><title>tone</title></head>
+<body style="margin:0;background:#000;color:#888;font:40px sans-serif">1 kHz, -20 dBFS
+<script>
+const ctx = new AudioContext({sampleRate: 48000});
+const osc = ctx.createOscillator(), gain = ctx.createGain();
+osc.frequency.value = 1000; gain.gain.value = Math.pow(10, -20 / 20);
+osc.connect(gain).connect(ctx.destination); osc.start();
+</script></body></html>
