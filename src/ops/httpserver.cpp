@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <thread>
@@ -386,7 +387,7 @@ namespace mbs::ops
             {
                 handler(req, res);
             }
-            catch (std::exception const& ex)
+            catch (std::exception const&)
             {
                 res = HttpResponse{};
                 res.status = 500;

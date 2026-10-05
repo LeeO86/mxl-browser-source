@@ -39,8 +39,14 @@ add_library(mbs-core STATIC
     src/engine/framestore.cpp
     src/engine/tick.cpp
     src/mxlio/setup.cpp
+    src/nmos/ids.cpp
+    src/ops/httpserver.cpp
+    src/ops/interact.cpp
+    src/ops/keymap.cpp
+    src/ops/urlpolicy.cpp
     src/util/logging.cpp
     src/util/metrics.cpp
+    src/util/net.cpp
     src/util/uuid.cpp
 )
 target_include_directories(mbs-core PUBLIC src third_party)
@@ -55,7 +61,12 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_convert.cpp
         tests/unit/test_engine.cpp
         tests/unit/test_framestore.cpp
+        tests/unit/test_httpserver.cpp
+        tests/unit/test_ids.cpp
+        tests/unit/test_interact.cpp
+        tests/unit/test_keymap.cpp
         tests/unit/test_tick.cpp
+        tests/unit/test_urlpolicy.cpp
     )
     target_link_libraries(unit-tests PRIVATE mbs-core)
     add_test(NAME unit-tests COMMAND unit-tests)

@@ -110,11 +110,15 @@ namespace mbs::ops
             int port = 0;
             for (char c : portText)
             {
-                if (!std::isdigit(static_cast<unsigned char>(c)) || port > 65535)
+                if (!std::isdigit(static_cast<unsigned char>(c)))
                 {
                     return std::nullopt;
                 }
                 port = port * 10 + (c - '0');
+                if (port > 65535)
+                {
+                    return std::nullopt;
+                }
             }
             out.port = port;
         }
