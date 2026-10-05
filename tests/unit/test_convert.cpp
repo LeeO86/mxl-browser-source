@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <random>
@@ -147,4 +148,153 @@ TEST_CASE("whole frames are byte-identical with either pass 1")
             CHECK(a.key == b.key);
         }
     }
+}
+
+namespace
+{
+    // The pass-2 packers before the table and interior-loop versions, as the reference.
+    std::int32_t refChroma(std::int32_t l, std::int32_t c, std::int32_t r)
+    {
+        return std::clamp(512 + ((l + 2 * c + r + (1 << 15)) >> 16), 4, 1019);
+    }
+
+    void refPut(std::uint32_t* w, std::size_t i, std::uint32_t a, std::uint32_t b, std::uint32_t c)
+    {
+        w[i] = (a & 0x3FFu) | ((b & 0x3FFu) << 10) | ((c & 0x3FFu) << 20);
+    }
+
+    void refPackFill(cv::Row const& row, std::uint32_t width, std::uint8_t* out)
+    {
+        auto* words = reinterpret_cast<std::uint32_t*>(out);
+        std::uint32_t const groups = (width + 5) / 6;
+        auto const last = static_cast<std::int64_t>(width) - 1;
+        auto const at = [&](std::vector<std::int32_t> const& v, std::int64_t x) { return v[static_cast<std::size_t>(std::clamp<std::int64_t>(x, 0, last))]; };
+        auto const yAt = [&](std::uint32_t x) -> std::uint32_t { return x < width ? static_cast<std::uint32_t>(row.y[x]) : 0u; };
+        auto const cAt = [&](std::vector<std::int32_t> const& v, std::uint32_t x) -> std::uint32_t {
+            return x >= width ? 0u : static_cast<std::uint32_t>(refChroma(at(v, static_cast<std::int64_t>(x) - 1), v[x], at(v, static_cast<std::int64_t>(x) + 1)));
+        };
+        for (std::uint32_t g = 0; g < groups; ++g)
+        {
+            std::uint32_t const x = g * 6;
+            std::size_t const w = static_cast<std::size_t>(g) * 4;
+            refPut(words, w + 0, cAt(row.cb, x), yAt(x), cAt(row.cr, x));
+            refPut(words, w + 1, yAt(x + 1), cAt(row.cb, x + 2), yAt(x + 2));
+            refPut(words, w + 2, cAt(row.cr, x + 2), yAt(x + 3), cAt(row.cb, x + 4));
+            refPut(words, w + 3, yAt(x + 4), cAt(row.cr, x + 4), yAt(x + 5));
+        }
+        std::size_t const used = static_cast<std::size_t>(groups) * 16;
+        std::memset(out + used, 0, cv::v210RowBytes(width) - used);
+    }
+
+    void refPackAlpha(std::uint8_t const* a, std::uint32_t width, std::uint8_t* out)
+    {
+        auto* words = reinterpret_cast<std::uint32_t*>(out);
+        auto const a10 = [&](std::uint32_t x) -> std::uint32_t { return x < width ? (static_cast<std::uint32_t>(a[x]) * 1023u + 127u) / 255u : 0u; };
+        for (std::uint32_t i = 0; i < (width + 2) / 3; ++i)
+        {
+            refPut(words, i, a10(3 * i), a10(3 * i + 1), a10(3 * i + 2));
+        }
+    }
+
+    void refPackKey(std::uint8_t const* a, std::uint32_t width, std::uint8_t* out)
+    {
+        auto* words = reinterpret_cast<std::uint32_t*>(out);
+        auto const yk = [&](std::uint32_t x) -> std::uint32_t { return x < width ? 64u + (static_cast<std::uint32_t>(a[x]) * 876u + 127u) / 255u : 0u; };
+        auto const ck = [&](std::uint32_t x) -> std::uint32_t { return x < width ? 512u : 0u; };
+        for (std::uint32_t g = 0; g < (width + 5) / 6; ++g)
+        {
+            std::uint32_t const x = g * 6;
+            std::size_t const w = static_cast<std::size_t>(g) * 4;
+            refPut(words, w + 0, ck(x), yk(x), ck(x));
+            refPut(words, w + 1, yk(x + 1), ck(x + 2), yk(x + 2));
+            refPut(words, w + 2, ck(x + 2), yk(x + 3), ck(x + 4));
+            refPut(words, w + 3, yk(x + 4), ck(x + 4), yk(x + 5));
+        }
+        std::size_t const used = static_cast<std::size_t>((width + 5) / 6) * 16;
+        std::memset(out + used, 0, cv::v210RowBytes(width) - used);
+    }
+}
+
+TEST_CASE("the pass-2 packers give the reference bytes at every width")
+{
+    std::mt19937 rng(17);
+    for (std::uint32_t width : {1u, 2u, 3u, 5u, 6u, 7u, 11u, 12u, 13u, 47u, 48u, 49u, 719u, 720u, 1280u, 1281u, 1919u, 1920u, 3840u})
+    {
+        cv::Row row;
+        row.resize(width);
+        std::vector<std::uint8_t> a(width + 8);
+        for (std::uint32_t x = 0; x < width; ++x)
+        {
+            row.y[x] = static_cast<std::int32_t>(4 + rng() % 1016);
+            row.cb[x] = static_cast<std::int32_t>(rng() % 2000001) - 1000000; // around ±0.5·896·2^14
+            row.cr[x] = static_cast<std::int32_t>(rng() % 2000001) - 1000000;
+            a[x] = static_cast<std::uint8_t>(rng());
+        }
+        std::vector<std::uint8_t> expected(cv::v210RowBytes(width) + 16, 0xAA), actual(expected);
+        refPackFill(row, width, expected.data());
+        cv::packFillRow(row, width, actual.data());
+        CHECK(expected == actual);
+        std::vector<std::uint8_t> ea(cv::alphaRowBytes(width) + 16, 0xAA), aa(ea);
+        refPackAlpha(a.data(), width, ea.data());
+        cv::packAlphaRow(a.data(), width, aa.data());
+        CHECK(ea == aa);
+        std::vector<std::uint8_t> ek(cv::v210RowBytes(width) + 16, 0xAA), ak(ek);
+        refPackKey(a.data(), width, ek.data());
+        cv::packKeyRow(a.data(), width, ak.data());
+        CHECK(ek == ak);
+    }
+}
+
+TEST_CASE("bands of rows give the same frame as one pass")
+{
+    std::uint32_t const width = 1281;
+    std::uint32_t const height = 37;
+    auto const px = raster(width, height, 99);
+    auto const whole = convert(px, width, height, true, nullptr);
+    Planes banded;
+    banded.fill.assign(whole.fill.size(), 0xAA);
+    banded.alpha.assign(whole.alpha.size(), 0xAA);
+    banded.key.assign(whole.key.size(), 0xAA);
+    cv::Request r;
+    r.bgra = px.data();
+    r.bgraStride = static_cast<std::size_t>(width) * 4;
+    r.width = width;
+    r.height = height;
+    r.straight = true;
+    r.fill = banded.fill.data();
+    r.alpha = banded.alpha.data();
+    r.key = banded.key.data();
+    cv::convertRows(r, nullptr, 20, height);
+    cv::convertRows(r, nullptr, 0, 7);
+    cv::convertRows(r, nullptr, 7, 20);
+    CHECK(banded.fill == whole.fill);
+    CHECK(banded.alpha == whole.alpha);
+    CHECK(banded.key == whole.key);
+}
+
+TEST_CASE("AVX2 straight fill: runs of opaque and transparent pixels give the scalar bytes")
+{
+    if (!cv::avx2Available())
+    {
+        return;
+    }
+    // A graphics page: long opaque runs (any colour), fully transparent runs (colour may be
+    // non-zero, must become 0), and mixed-alpha runs, at odd offsets against the 8-pixel steps.
+    std::uint32_t const width = 1923;
+    std::uint32_t const height = 4;
+    std::mt19937 rng(5);
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(width) * height * 4);
+    for (std::size_t p = 0; p < px.size() / 4; ++p)
+    {
+        auto const kind = (p / 37) % 3;
+        px[4 * p] = static_cast<std::uint8_t>(rng());
+        px[4 * p + 1] = static_cast<std::uint8_t>(rng());
+        px[4 * p + 2] = static_cast<std::uint8_t>(rng());
+        px[4 * p + 3] = kind == 0 ? 255 : (kind == 1 ? 0 : static_cast<std::uint8_t>(rng()));
+    }
+    auto const scalar = convert(px, width, height, true, &cv::pixelsScalar);
+    auto const avx2 = convert(px, width, height, true, &cv::pixelsAvx2);
+    CHECK(scalar.fill == avx2.fill);
+    CHECK(scalar.alpha == avx2.alpha);
+    CHECK(scalar.key == avx2.key);
 }

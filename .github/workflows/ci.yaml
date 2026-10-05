@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The CEF pin is here and in docker/Dockerfile (keep in sync, SPEC §3).
+env:
+  CEF_VERSION: 144.0.21+g4f5b28c+chromium-144.0.7559.248
+  CEF_SHA1: e6233049cec12ba108b4b920b499e2a082ffd0ae
+
+jobs:
+  dockerfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Check the Dockerfile
+        run: docker buildx build --check --file docker/Dockerfile .
+
+  unit:
+    # The core library and its tests: no CEF, no libmxl.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config libsamplerate0-dev
+      - name: Build and run the unit tests
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ./build/unit-tests
+
+  image:
+    # The whole image (MXL, nmos-cpp, CEF, the binaries; the unit tests run again inside).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          build-args: |
+            CEF_VERSION=${{ env.CEF_VERSION }}
+            CEF_SHA1=${{ env.CEF_SHA1 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

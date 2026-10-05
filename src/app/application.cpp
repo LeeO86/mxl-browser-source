@@ -318,13 +318,14 @@ namespace mbs::app
         }
         else
         {
-            // auto (SPEC §6): audio reaches MXL after the FIFO target plus Chromium's 10 ms
-            // packet, video after the BeginFrame lead; delay video by the difference.
-            double const audioMs = _cfg.audioChannels > 0 ? _cfg.audioBufferMs + 10.0 : 0.0;
+            // auto (SPEC §6): audio reaches MXL after the FIFO target plus Chromium's own audio path,
+            // video after the BeginFrame lead; delay video by the difference. Chromium's path measured
+            // with avsync.html on the lab: about 40 ms (2026-10-05, 1080p50, GPU mode).
+            constexpr double kChromiumAudioMs = 40.0;
+            double const audioMs = _cfg.audioChannels > 0 ? _cfg.audioBufferMs + kChromiumAudioMs : 0.0;
             double const videoMs = periodMs * _cfg.frameLead;
             es.videoDelayGrains = static_cast<std::uint32_t>(std::max(0L, std::lround((audioMs - videoMs) / periodMs)));
         }
-        es.lateNs = static_cast<std::uint64_t>(periodMs * 1e6);
         switch (_cfg.onPageError)
         {
         case config::PageErrorMode::Transparent: es.onPageError = engine::Substitute::Transparent; break;

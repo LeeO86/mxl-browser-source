@@ -313,7 +313,8 @@ namespace mbs::cef
         cef.no_sandbox = true;
         cef.multi_threaded_message_loop = false;
         cef.log_severity = LOGSEVERITY_WARNING;
-        CefString(&cef.log_file).FromString("/dev/stderr");
+        // Chromium logs to stderr and to this file; /dev/stderr would print every line twice.
+        CefString(&cef.log_file).FromString("/dev/null");
         CefString(&cef.browser_subprocess_path).FromString(settings.helperPath);
         if (!settings.resourcesDir.empty())
         {

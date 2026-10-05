@@ -10,7 +10,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -85,9 +84,9 @@ namespace mbs::engine
         std::uint32_t audioTargetFrames = 2880; // FIFO target (60 ms)
         std::uint32_t videoDelayGrains = 0;
         std::uint64_t marginNs = 1'000'000; // wake this long after the grain start (ε)
-        std::uint64_t lateNs = 20'000'000;  // a paint later than this after its BeginFrame is late
         Substitute onPageError = Substitute::Hold;
         std::uint32_t previewWidth = 960; // 0: no preview
+        unsigned convertThreads = 4;      // bands of rows converted in parallel (latency, not CPU)
     };
 
     struct EngineStats
@@ -97,7 +96,7 @@ namespace mbs::engine
         std::uint64_t convertedUnused = 0; // replaced by a newer conversion before a tick took them
         std::uint64_t paintsDropped = 0;   // replaced in the frame store before conversion
         std::uint64_t paintsRejected = 0;  // wrong size (a resize in flight)
-        std::uint64_t latePaints = 0;      // paints that came later than lateNs after their BeginFrame
+        std::uint64_t latePaints = 0;      // paints never committed: a newer one arrived before the tick (late or superseded)
         audio::ResamplerStats audio;
         std::vector<double> audioPeakDbfs; // per flow channel, last grain
     };
@@ -196,9 +195,8 @@ namespace mbs::engine
         bool _stopping = false;
         std::atomic<bool> _stop{false};
 
-        // Paint latency: BeginFrames sent and not answered yet (TAI ns), oldest first.
-        std::mutex _beginMutex;
-        std::deque<std::uint64_t> _beginFrames;
+        // When the newest BeginFrame was sent (TAI ns), for the paint latency.
+        std::atomic<std::uint64_t> _lastBeginFrameNs{0};
 
         // Audio, on the tick thread (the FIFO's producer is CEF's audio thread).
         std::unique_ptr<audio::Fifo> _fifo;

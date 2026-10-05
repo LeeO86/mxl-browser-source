@@ -70,6 +70,13 @@ namespace mbs::audio
         double fill = static_cast<double>(fifo.available() + pendingFrames());
         if (_priming && fill >= _target)
         {
+            // Start at the target exactly: what arrived beyond it (a packet, or a burst after the
+            // page started its audio) would otherwise take the controller minutes at ±500 ppm.
+            if (auto const excess = static_cast<std::size_t>(fill - _target); excess > 0)
+            {
+                fifo.drop(std::min(excess, fifo.available()));
+                fill = static_cast<double>(fifo.available() + pendingFrames());
+            }
             _priming = false;
         }
         if (!_priming && fill > kOverrunFactor * _target)

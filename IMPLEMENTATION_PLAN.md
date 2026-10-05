@@ -53,7 +53,26 @@ More decisions:
 - **Preview.** One preview size for all sessions (`BROWSER_PREVIEW_WIDTH`); a session's `width` in the `preview` message is accepted and ignored (one conversion serves everyone). Rates are per session: watchers up to `BROWSER_PREVIEW_FPS`, the controller up to 25.
 - **DevTools behind a token.** A link with `?token=` is answered with a redirect that sets an `HttpOnly` cookie for `/devtools`, so the frontend's own requests and its WebSocket authenticate; the tunnel rewrites `Host` and `Origin` to `127.0.0.1:<port>` (Chromium refuses others) and drops the cookie and `Authorization` headers.
 
+### First lab runs (2026-10-05, A16 lab host, 2× Xeon Gold 6136, 1080p50, v210a, lab registry)
+
+The image builds (2.2 GB uncompressed) and starts; `/readyz` turns 200 when the lab registry's Query API lists the node. The grain reader (`tests/tools/grain_reader`, in the image as `mxl-bs-grain-reader`) decodes `counter.html` from every grain and finds `avsync.html`'s flashes and bursts.
+
+| Step | Result |
+| --- | --- |
+| first run, software | 1002 grains in 20 s, 0 missed, but 121 repeats each followed by a skip of 2: the conversion took about 12 ms of CPU per frame on one thread and paint + conversion missed the 20 ms tick |
+| pass 2 rewritten (chroma filtered once per row, tables for alpha and key, AVX2 alpha store), conversion in 4 bands on a worker pool | 997 of 1002 consecutive, 2 repeats; 2.2–3.3 ms per frame |
+| AVX2 pass 1 skips the unpremultiply gather when 8 pixels are all opaque or all transparent, AVX2 chroma filter | 999 of 1002; 0.99 cores (was 1.23); conversion 2.2 ms |
+| GPU mode | WebGL reports `ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)`; 995 of 1002 consecutive, 3 repeats; 0.98 cores |
+| `tone.html` | −20.01 dBFS on both channels; FIFO 61 ms, drift 13 ppm, no underruns at steady state |
+| `avsync.html`, 3 grains video delay | first 87 ms: the FIFO held 121 ms after the stream start and the controller needed minutes at 500 ppm. Priming now ends at the target exactly (the excess is dropped): 16 ms after the start, 21.6 ms (17–25) at steady state |
+
+All conversion changes produce the same bytes as before (unit tests against the previous packers at 19 widths, AVX2 against scalar on runs of opaque and transparent pixels, bands against one pass).
+
+More decisions:
+- **Late paints.** A paint carries no frame id and an unchanged page answers no BeginFrame, so pairing a paint with "its" BeginFrame drifts off by a period after one unanswered BeginFrame (the first run counted nearly every paint as late). `late_paints_total` now counts paints that were never committed because a newer one arrived before the tick; `paint_latency_seconds` is measured from the newest BeginFrame.
+- **Auto video delay.** Chromium's own audio path measured about 40 ms (GPU mode): `BROWSER_VIDEO_DELAY_GRAINS=auto` = round((audio buffer + 40 ms − lead·P) / P), 4 grains at 1080p50.
+- **Logs.** Chromium logs to stderr and to `log_file`; `log_file` is `/dev/null`, otherwise every line appears twice. Chromium's D-Bus errors at start (no bus in the container) are harmless.
+
 Next, in order:
-1. First full image build on the lab; fix compile errors in the CEF/nmos-cpp parts; start it with `bars.html` and a registry.
-2. Lab runs: frame accuracy (`counter.html` with a grain reader), A/V offset (`avsync.html`), colour and key values, interaction, crash and hang recovery, GPU and software CPU, 1 h soak.
-3. CI (`.github/workflows/ci.yaml`, `container.yaml`), Compose files, Kubernetes examples, Grafana dashboard, README and docs, integration tests, release 1.0.0.
+1. A/V check with the new auto delay in GPU and software mode; colour and key values (`bars.html`, `transparency.html`), interaction from the UI, template calls, crash and hang recovery, DevTools through the tunnel, SIGTERM (143, node deregistered, domain removed).
+2. Image size (fonts-noto-cjk is large), Compose files, Kubernetes examples, Grafana dashboard, integration tests in CI, the G1–G14 table, 1 h soak, release 1.0.0.

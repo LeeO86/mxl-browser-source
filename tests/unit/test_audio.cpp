@@ -95,8 +95,13 @@ TEST_CASE("resampler primes with silence, then counts an underrun and an overrun
     }
     CHECK(resampler.stats().underruns == 1);
     CHECK(resampler.stats().resets == 1);
-    // Far too much queued: cut back to the target.
-    source.pushUntil(fifo, 0.6);
+    // Priming ends at the target exactly: 120 ms arrived at once, 60 ms are kept.
+    source.pushUntil(fifo, 0.22);
+    resampler.produce(fifo, out.data(), 960, 0);
+    CHECK(resampler.stats().overruns == 0);
+    CHECK(static_cast<double>(fifo.available()) / 48000.0 < 0.061);
+    // Running, far too much queued: cut back to the target.
+    source.pushUntil(fifo, 0.8);
     resampler.produce(fifo, out.data(), 960, 0);
     CHECK(resampler.stats().overruns == 1);
     CHECK(resampler.stats().fillSeconds < 0.07);

@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <cmath>
 #include <utility>
 
 #include "convert/convert.hpp"
+#include "util/taskpool.hpp"
 #include "util/logging.hpp"
 
 namespace mbs::engine
@@ -29,7 +31,8 @@ namespace mbs::engine
             }
         }
 
-        void convertInto(GrainBuffers& set, EngineSettings const& s, std::uint8_t const* bgra)
+        // Converts a paint into a buffer set; with a pool, in bands of rows on its threads.
+        void convertInto(GrainBuffers& set, EngineSettings const& s, std::uint8_t const* bgra, util::TaskPool* pool = nullptr)
         {
             convert::Request request;
             request.bgra = bgra;
@@ -40,11 +43,21 @@ namespace mbs::engine
             request.fill = set.fill.data();
             request.alpha = set.alpha.empty() ? nullptr : set.alpha.data();
             request.key = set.key.empty() ? nullptr : set.key.data();
-            convert::convertFrame(request);
+            if (pool == nullptr || s.convertThreads <= 1)
+            {
+                convert::convertFrame(request);
+                return;
+            }
+            std::vector<std::function<void()>> bands;
+            std::uint32_t const n = std::min<std::uint32_t>(s.convertThreads * 2, s.height);
+            for (std::uint32_t b = 0; b < n; ++b)
+            {
+                std::uint32_t const first = s.height * b / n;
+                std::uint32_t const end = s.height * (b + 1) / n;
+                bands.emplace_back([request, first, end] { convert::convertRows(request, nullptr, first, end); });
+            }
+            pool->run(bands);
         }
-
-        // Unanswered BeginFrames older than this many late thresholds found the page unchanged.
-        constexpr std::uint64_t kStaleBeginFrames = 3;
     }
 
     Engine::Engine(EngineSettings settings, Clock& clock, Outputs& outputs, util::Metrics& metrics)
@@ -136,30 +149,12 @@ namespace mbs::engine
             ++_stats.paintsRejected;
             return;
         }
-        // The paint answers the oldest BeginFrame that is still waiting. Those older than a few
-        // late thresholds found nothing to draw (a static page answers none).
-        std::uint64_t answered = 0;
+        // A paint carries no frame id, and a BeginFrame on an unchanged page gets no paint, so a
+        // paint cannot be paired with "its" BeginFrame: the latency is taken from the newest one.
+        // Paints that came too late show up as paints never committed (stats().latePaints).
+        if (auto const sent = _lastBeginFrameNs.load(); sent != 0 && now >= sent)
         {
-            std::lock_guard lock{_beginMutex};
-            while (!_beginFrames.empty() && now - _beginFrames.front() > kStaleBeginFrames * _settings.lateNs)
-            {
-                _beginFrames.pop_front();
-            }
-            if (!_beginFrames.empty())
-            {
-                answered = _beginFrames.front();
-                _beginFrames.pop_front();
-            }
-        }
-        if (answered != 0 && now >= answered)
-        {
-            auto const latency = now - answered;
-            _metrics.observe("paint_latency_seconds", {}, static_cast<double>(latency) / 1e9);
-            if (latency > _settings.lateNs)
-            {
-                std::lock_guard lock{_statsMutex};
-                ++_stats.latePaints;
-            }
+            _metrics.observe("paint_latency_seconds", {}, static_cast<double>(now - sent) / 1e9);
         }
         {
             std::lock_guard lock{_wakeMutex};
@@ -170,12 +165,7 @@ namespace mbs::engine
 
     void Engine::beginFrameSent()
     {
-        std::lock_guard lock{_beginMutex};
-        _beginFrames.push_back(_clock.nowNs());
-        if (_beginFrames.size() > 16)
-        {
-            _beginFrames.pop_front();
-        }
+        _lastBeginFrameNs.store(_clock.nowNs());
     }
 
     void Engine::setPageState(PageState state)
@@ -249,6 +239,7 @@ namespace mbs::engine
         std::lock_guard lock{_statsMutex};
         EngineStats out = _stats;
         out.paintsDropped = _store.dropped();
+        out.latePaints = out.paintsDropped + out.convertedUnused;
         return out;
     }
 
@@ -279,6 +270,7 @@ namespace mbs::engine
 
     void Engine::converterLoop()
     {
+        util::TaskPool converters(std::max(1U, _settings.convertThreads) - 1); // the converter thread helps
         std::uint8_t const* last = nullptr; // the newest paint, valid until the next take()
         while (true)
         {
@@ -307,7 +299,7 @@ namespace mbs::engine
                     continue;
                 }
                 auto const t0 = std::chrono::steady_clock::now();
-                convertInto(_pool[static_cast<std::size_t>(id)], _settings, frame.bgra);
+                convertInto(_pool[static_cast<std::size_t>(id)], _settings, frame.bgra, &converters);
                 _metrics.observe("convert_seconds", {}, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
                 bool replaced = false;
                 {

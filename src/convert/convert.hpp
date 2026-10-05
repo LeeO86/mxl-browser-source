@@ -55,6 +55,9 @@ namespace mbs::convert
     void pixelsScalar(std::uint8_t const* bgra, std::uint32_t count, bool straight, std::int32_t* y, std::int32_t* cb, std::int32_t* cr, std::uint8_t* a);
     /// AVX2 pass 1; only call when avx2Available().
     void pixelsAvx2(std::uint8_t const* bgra, std::uint32_t count, bool straight, std::int32_t* y, std::int32_t* cb, std::int32_t* cr, std::uint8_t* a);
+    /// AVX2 [1 2 1]/4 chroma filter of pass 2 for first <= x < end (x-1 and x+1 inside the row);
+    /// only call when avx2Available().
+    void chromaRowAvx2(std::int32_t const* c, std::uint32_t first, std::uint32_t end, std::uint32_t* out);
     [[nodiscard]] bool avx2Available();
 
     /// Pass 2.
@@ -64,6 +67,8 @@ namespace mbs::convert
 
     /// Converts a frame with the given pass 1 (default: AVX2 when available).
     void convertFrame(Request const& request, PixelFn pixels = nullptr);
+    /// Lines [firstLine, endLine) of a frame; disjoint ranges may run on different threads.
+    void convertRows(Request const& request, PixelFn pixels, std::uint32_t firstLine, std::uint32_t endLine);
 
     /// Reciprocal table for un-premultiplying: c = min(255, (c * table[a] + 32768) >> 16).
     std::uint32_t const* unpremultiplyTable();

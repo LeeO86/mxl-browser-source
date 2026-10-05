@@ -111,51 +111,142 @@ namespace mbs::convert
     {
         auto* words = reinterpret_cast<std::uint32_t*>(out);
         std::uint32_t const groups = (width + 5) / 6;
-        auto const last = static_cast<std::int64_t>(width) - 1;
-        auto const at = [&](std::vector<std::int32_t> const& v, std::int64_t x) { return v[static_cast<std::size_t>(std::clamp<std::int64_t>(x, 0, last))]; };
-        auto const yAt = [&](std::uint32_t x) -> std::uint32_t { return x < width ? static_cast<std::uint32_t>(row.y[x]) : 0u; };
-        auto const cAt = [&](std::vector<std::int32_t> const& v, std::uint32_t x) -> std::uint32_t {
-            if (x >= width)
-            {
-                return 0u;
-            }
-            return static_cast<std::uint32_t>(chroma(at(v, static_cast<std::int64_t>(x) - 1), v[x], at(v, static_cast<std::int64_t>(x) + 1)));
+        // Filtered chroma first, at full resolution (the co-sited even pixels are taken below):
+        // the interior in plain loops without bounds checks (AVX2 when available), the
+        // clamped edge taps only at both ends.
+        thread_local std::vector<std::uint32_t> fcb;
+        thread_local std::vector<std::uint32_t> fcr;
+        fcb.resize(width);
+        fcr.resize(width);
+        std::int32_t const* cb = row.cb.data();
+        std::int32_t const* cr = row.cr.data();
+        auto const last = width - 1;
+        auto const edge = [&](std::int32_t const* v, std::uint32_t x) {
+            auto const left = v[x == 0 ? 0 : x - 1];
+            auto const right = v[x + 1 > last ? last : x + 1];
+            return static_cast<std::uint32_t>(chroma(left, v[x], right));
         };
-        for (std::uint32_t g = 0; g < groups; ++g)
+        fcb[0] = edge(cb, 0);
+        fcr[0] = edge(cr, 0);
+        fcb[last] = edge(cb, last);
+        fcr[last] = edge(cr, last);
+        if (width > 2)
+        {
+            if (avx2Available())
+            {
+                chromaRowAvx2(cb, 1, last, fcb.data());
+                chromaRowAvx2(cr, 1, last, fcr.data());
+            }
+            else
+            {
+                for (std::uint32_t x = 1; x < last; ++x)
+                {
+                    fcb[x] = static_cast<std::uint32_t>(chroma(cb[x - 1], cb[x], cb[x + 1]));
+                    fcr[x] = static_cast<std::uint32_t>(chroma(cr[x - 1], cr[x], cr[x + 1]));
+                }
+            }
+        }
+        // Chroma site c is pixel 2c.
+        auto const cb10 = [&](std::uint32_t c) { return fcb[2 * c]; };
+        auto const cr10 = [&](std::uint32_t c) { return fcr[2 * c]; };
+        std::int32_t const* y = row.y.data();
+        std::uint32_t const fullGroups = width / 6; // all six pixels inside the width
+        for (std::uint32_t g = 0; g < fullGroups; ++g)
         {
             std::uint32_t const x = g * 6;
-            std::size_t const w = static_cast<std::size_t>(g) * 4;
+            std::uint32_t const c = g * 3;
+            std::uint32_t* w = words + static_cast<std::size_t>(g) * 4;
             // Cb0 Y0 Cr0 | Y1 Cb1 Y2 | Cr1 Y3 Cb2 | Y4 Cr2 Y5
-            put(words, w + 0, cAt(row.cb, x), yAt(x), cAt(row.cr, x));
-            put(words, w + 1, yAt(x + 1), cAt(row.cb, x + 2), yAt(x + 2));
-            put(words, w + 2, cAt(row.cr, x + 2), yAt(x + 3), cAt(row.cb, x + 4));
-            put(words, w + 3, yAt(x + 4), cAt(row.cr, x + 4), yAt(x + 5));
+            w[0] = cb10(c) | (static_cast<std::uint32_t>(y[x]) << 10) | (cr10(c) << 20);
+            w[1] = static_cast<std::uint32_t>(y[x + 1]) | (cb10(c + 1) << 10) | (static_cast<std::uint32_t>(y[x + 2]) << 20);
+            w[2] = cr10(c + 1) | (static_cast<std::uint32_t>(y[x + 3]) << 10) | (cb10(c + 2) << 20);
+            w[3] = static_cast<std::uint32_t>(y[x + 4]) | (cr10(c + 2) << 10) | (static_cast<std::uint32_t>(y[x + 5]) << 20);
+        }
+        if (fullGroups < groups) // the partial last group: samples past the width are 0
+        {
+            std::uint32_t const x = fullGroups * 6;
+            std::uint32_t const c = fullGroups * 3;
+            auto const yAt = [&](std::uint32_t i) -> std::uint32_t { return i < width ? static_cast<std::uint32_t>(y[i]) : 0u; };
+            auto const cbAt = [&](std::uint32_t i) -> std::uint32_t { return 2 * i < width ? cb10(i) : 0u; };
+            auto const crAt = [&](std::uint32_t i) -> std::uint32_t { return 2 * i < width ? cr10(i) : 0u; };
+            std::size_t const w = static_cast<std::size_t>(fullGroups) * 4;
+            put(words, w + 0, cbAt(c), yAt(x), crAt(c));
+            put(words, w + 1, yAt(x + 1), cbAt(c + 1), yAt(x + 2));
+            put(words, w + 2, crAt(c + 1), yAt(x + 3), cbAt(c + 2));
+            put(words, w + 3, yAt(x + 4), crAt(c + 2), yAt(x + 5));
         }
         std::size_t const used = static_cast<std::size_t>(groups) * 16;
         std::memset(out + used, 0, v210RowBytes(width) - used);
     }
 
+    namespace
+    {
+        // round(a·1023/255) for the v210a alpha plane, and the key as legal luma.
+        std::array<std::uint32_t, 256> const& alpha10Table()
+        {
+            static std::array<std::uint32_t, 256> const table = [] {
+                std::array<std::uint32_t, 256> t{};
+                for (std::uint32_t a = 0; a < 256; ++a)
+                {
+                    t[a] = (a * 1023u + 127u) / 255u;
+                }
+                return t;
+            }();
+            return table;
+        }
+
+        std::array<std::uint32_t, 256> const& keyLumaTable()
+        {
+            static std::array<std::uint32_t, 256> const table = [] {
+                std::array<std::uint32_t, 256> t{};
+                for (std::uint32_t a = 0; a < 256; ++a)
+                {
+                    t[a] = 64u + (a * 876u + 127u) / 255u;
+                }
+                return t;
+            }();
+            return table;
+        }
+    }
+
     void packAlphaRow(std::uint8_t const* a, std::uint32_t width, std::uint8_t* out)
     {
         auto* words = reinterpret_cast<std::uint32_t*>(out);
-        auto const a10 = [&](std::uint32_t x) -> std::uint32_t { return x < width ? (static_cast<std::uint32_t>(a[x]) * 1023u + 127u) / 255u : 0u; };
-        std::uint32_t const n = (width + 2) / 3;
-        for (std::uint32_t i = 0; i < n; ++i)
+        auto const& t = alpha10Table();
+        std::uint32_t const full = width / 3;
+        for (std::uint32_t i = 0; i < full; ++i)
         {
-            put(words, i, a10(3 * i), a10(3 * i + 1), a10(3 * i + 2));
+            words[i] = t[a[3 * i]] | (t[a[3 * i + 1]] << 10) | (t[a[3 * i + 2]] << 20);
+        }
+        if (full * 3 < width)
+        {
+            std::uint32_t const x = full * 3;
+            words[full] = t[a[x]] | ((x + 1 < width ? t[a[x + 1]] : 0u) << 10);
         }
     }
 
     void packKeyRow(std::uint8_t const* a, std::uint32_t width, std::uint8_t* out)
     {
         auto* words = reinterpret_cast<std::uint32_t*>(out);
-        auto const yk = [&](std::uint32_t x) -> std::uint32_t { return x < width ? 64u + (static_cast<std::uint32_t>(a[x]) * 876u + 127u) / 255u : 0u; };
-        auto const ck = [&](std::uint32_t x) -> std::uint32_t { return x < width ? 512u : 0u; };
+        auto const& t = keyLumaTable();
         std::uint32_t const groups = (width + 5) / 6;
-        for (std::uint32_t g = 0; g < groups; ++g)
+        std::uint32_t const fullGroups = width / 6;
+        constexpr std::uint32_t c = 512u;
+        for (std::uint32_t g = 0; g < fullGroups; ++g)
         {
-            std::uint32_t const x = g * 6;
-            std::size_t const w = static_cast<std::size_t>(g) * 4;
+            std::uint8_t const* k = a + static_cast<std::size_t>(g) * 6;
+            std::uint32_t* w = words + static_cast<std::size_t>(g) * 4;
+            w[0] = c | (t[k[0]] << 10) | (c << 20);
+            w[1] = t[k[1]] | (c << 10) | (t[k[2]] << 20);
+            w[2] = c | (t[k[3]] << 10) | (c << 20);
+            w[3] = t[k[4]] | (c << 10) | (t[k[5]] << 20);
+        }
+        if (fullGroups < groups)
+        {
+            std::uint32_t const x = fullGroups * 6;
+            auto const yk = [&](std::uint32_t i) -> std::uint32_t { return i < width ? t[a[i]] : 0u; };
+            auto const ck = [&](std::uint32_t i) -> std::uint32_t { return i < width ? c : 0u; };
+            std::size_t const w = static_cast<std::size_t>(fullGroups) * 4;
             put(words, w + 0, ck(x), yk(x), ck(x));
             put(words, w + 1, yk(x + 1), ck(x + 2), yk(x + 2));
             put(words, w + 2, ck(x + 2), yk(x + 3), ck(x + 4));
@@ -165,7 +256,7 @@ namespace mbs::convert
         std::memset(out + used, 0, v210RowBytes(width) - used);
     }
 
-    void convertFrame(Request const& req, PixelFn pixels)
+    void convertRows(Request const& req, PixelFn pixels, std::uint32_t firstLine, std::uint32_t endLine)
     {
         if (pixels == nullptr)
         {
@@ -175,7 +266,7 @@ namespace mbs::convert
         row.resize(req.width);
         std::size_t const fillStride = v210RowBytes(req.width);
         std::size_t const alphaStride = alphaRowBytes(req.width);
-        for (std::uint32_t line = 0; line < req.height; ++line)
+        for (std::uint32_t line = firstLine; line < endLine; ++line)
         {
             auto const* src = req.bgra + static_cast<std::size_t>(line) * req.bgraStride;
             pixels(src, req.width, req.straight, row.y.data(), row.cb.data(), row.cr.data(), row.a.data());
@@ -189,6 +280,11 @@ namespace mbs::convert
                 packKeyRow(row.a.data(), req.width, req.key + line * fillStride);
             }
         }
+    }
+
+    void convertFrame(Request const& req, PixelFn pixels)
+    {
+        convertRows(req, pixels, 0, req.height);
     }
 
     void previewRgb(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height, std::uint32_t outWidth,

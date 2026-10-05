@@ -26,18 +26,19 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 `GET /api/v1/status` (also pushed as `{"type":"status",…}` on `/api/v1/events` four times a second)
 
 ```json
-{"ready":true,
- "page":{"url":"https://templates.local/bars.html","title":"Bars","state":"loaded","error":"","loads":3},
- "render":{"mode":"gpu","degraded":false,"paint_ms":{"p50":5.2,"p95":9.8},"convert_ms":1.1},
+{"type":"status","ready":true,"not_ready":"",
+ "page":{"url":"https://templates.local/bars.html","title":"Bars","state":"loaded","loading":false,"error":"","loads":3},
+ "render":{"mode":"gpu","renderer":"ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)","requested":"gpu","degraded":false,
+           "format":"1080p50","width":1920,"height":1080},
  "grains":{"video":180000,"key":180000,"repeated":12,"missed":0,"late_paints":0,"begin_frames":180000},
  "audio":{"channels":2,"stream":true,"drift_ppm":3.1,"buffer_ms":60.2,"peaks_dbfs":[-20.1,-20.1],"underruns":0,"overruns":0},
  "interact":{"sessions":2,"controlled":true},
- "nmos":{"registered":true,"node_id":"…","senders":{"video":{"id":"…","flow_id":"…","enabled":true},
+ "nmos":{"registered":true,"node_id":"…","device_id":"…","domain_id":"…","senders":{"video":{"id":"…","flow_id":"…","enabled":true},
          "key":{"id":"…","flow_id":"…","enabled":true},"audio":{"id":"…","flow_id":"…","enabled":true}}},
  "devtools":{"enabled":false,"sessions":0}}
 ```
 
-`page.state` is `loading`, `loaded`, `error`, `crashed` or `hung`. Senders that do not exist in the current key mode or audio setting are absent.
+`page.state` is `loading`, `loaded`, `error`, `crashed` or `hung`. `not_ready` gives the reason while `ready` is false. `render.mode` is what the page reports (`unknown` before the first load). `grains.repeated` counts repeats for every reason (an unchanged page, a late paint, a page that loads or crashed); `late_paints` counts paints that were never committed because a newer one arrived before the tick. Paint latency and conversion time are histograms in `/metrics`. Senders that do not exist in the current key mode or audio setting are absent.
 
 ## Source
 

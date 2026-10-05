@@ -11,10 +11,12 @@
 #include <mxl/mxl.h>
 #include <mxl/time.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -200,24 +202,43 @@ namespace
             ++index;
         }
         recorder.join();
+        float peak = 0.F;
+        for (float v : recorded)
+        {
+            peak = std::max(peak, std::fabs(v));
+        }
+        std::printf("audio recorded=%zu samples from %llu, peak %.3f\n", recorded.size(), static_cast<unsigned long long>(audioStart), static_cast<double>(peak));
 
-        // Each flash: the first sample above -20 dBFS after 50 ms of quiet, within ±500 ms.
+        // Each flash: the burst onset within ±500 ms.
         std::vector<double> offsets;
         for (auto const flash : flashes)
         {
             auto const flashSample = static_cast<long long>(static_cast<double>(flash) * 48000.0 / 1e9);
             long long const from = std::max(0LL, flashSample - 24000 - static_cast<long long>(audioStart));
             long long const to = std::min(static_cast<long long>(recorded.size()), flashSample + 24000 - static_cast<long long>(audioStart));
-            int quiet = 0;
+            if (std::getenv("GRAIN_READER_DEBUG") != nullptr)
+            {
+                long long loudest = from;
+                for (long long i = from; i < to; ++i)
+                {
+                    if (std::fabs(recorded[static_cast<std::size_t>(i)]) > std::fabs(recorded[static_cast<std::size_t>(loudest)]))
+                    {
+                        loudest = i;
+                    }
+                }
+                std::printf("flash %llu window [%lld, %lld) loudest %.3f at %+.1f ms\n", static_cast<unsigned long long>(flash), from, to,
+                    to > from ? static_cast<double>(recorded[static_cast<std::size_t>(loudest)]) : 0.0,
+                    static_cast<double>(loudest + static_cast<long long>(audioStart) - flashSample) / 48.0);
+            }
+            // The burst (0.5 amplitude, 1 kHz) passes half its level within a twelfth of a period
+            // of its start; the window (±500 ms) never reaches the previous burst (1 s earlier).
             for (long long i = from; i < to; ++i)
             {
-                float const v = std::fabs(recorded[static_cast<std::size_t>(i)]);
-                if (v > 0.1F && quiet >= 2400)
+                if (std::fabs(recorded[static_cast<std::size_t>(i)]) > 0.25F)
                 {
                     offsets.push_back(static_cast<double>(i + static_cast<long long>(audioStart) - flashSample) / 48.0);
                     break;
                 }
-                quiet = v < 0.01F ? quiet + 1 : 0;
             }
         }
         double sum = 0;
