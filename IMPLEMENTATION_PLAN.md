@@ -36,12 +36,14 @@ Conclusions:
 
 ## 3. Progress (2026-10-05)
 
-Done: spikes; `docs/api.md` (wire format); `src/config` (settings table, document); `src/convert` (scalar pass 1, shared pass 2, preview); copied from mxl-decklink (MIT): `src/util/logging`, `src/util/uuid`, `src/mxlio/{domain,flowdef,videowriter}`, `cmake/EmbedFile.cmake`, `third_party/{doctest,picojson}`; web UI being written (`web/`).
+Done: spikes; `docs/api.md` (wire format); `src/config` (settings table, document); `src/convert` (scalar pass 1, AVX2 pass 1, shared pass 2, preview); `src/mxlio/{audiowriter,setup}` (planar float writer; tmpfs check, domain files, RLIMIT_NOFILE); `src/audio` (SPSC FIFO, PI-controlled libsamplerate resampler); `src/engine/{tick,framestore}` (tick logic, triple-buffered paints); `CMakeLists.txt` for the core library and unit tests (no CEF, no libmxl; 13 cases pass in Ubuntu 24.04 on the lab); copied from mxl-decklink (MIT): `src/util/logging`, `src/util/uuid`, `src/mxlio/{domain,flowdef,videowriter}`, `cmake/EmbedFile.cmake`, `third_party/{doctest,picojson}`; web UI (`web/`, builds to one 117 kB page).
+
+Decisions made while implementing:
+- **Resampler fill estimate.** The FIFO fill moves in packet steps (CEF: 480 frames = 10 ms). Sampled raw at the 20 ms tick it is a sawtooth that beats with the tick (period 10 ms ÷ drift, 50 s at 200 ppm) and kept the controller swinging ±500 ppm. The fill now counts what the page produced since its last packet (the push records its TAI time; capped at one packet), smoothed over 1 s. PI gains Kp 0.04 /s, Ki = Kp²/4 (critically damped, 50 s). Unit test: ±200 ppm over 300 s, no underruns, fill within 5 ms of the target, mean correction within 30 ppm of the drift.
+- **Tick.** As spike S2 found: a BeginFrame on every tick (none while crashed), no "outstanding" state; the tick commits the newest converted paint or repeats the last frame (`repeated` for a ready page, `repeatedHold` while loading/crashed/hung) and fills indexes it woke too late for (`missed`). Late paints are counted on the paint side (BeginFrame → OnPaint time).
 
 Next, in order:
-1. `src/convert/avx2.cpp` (pass 1 AVX2, unpremultiply via the table with a gather) and unit tests scalar == AVX2.
-2. `src/mxlio/audiowriter` (planar float), domain creation with the tmpfs check (exit 78), RLIMIT_NOFILE.
-3. `src/audio` (FIFO, PI-controlled libsamplerate resampler), `src/engine` (frame store with the OnPaint copy and converter thread; TAI tick: commit, audio, BeginFrame; metrics).
+3. Converter thread and engine glue (frame store → convert → grain buffers; tick → video/key/audio writers; metrics).
 4. `src/cef` (app with switches per render mode, client handlers, browser facade, templates.local scheme, URL policy, dialogs/popups/downloads/permissions), `helper/main.cpp`.
 5. `src/nmos` (ids, nmos-cpp node with video/key/audio senders, sr-ctrl, listener check), `src/ops` (HTTP/WebSocket server, REST API, interaction, events, metrics, DevTools proxy), `src/app`, `src/main.cpp`.
 6. CMakeLists, `docker/Dockerfile` (fetch.sh, mallinfo shim, 10_nvidia.json, fonts), CI, Compose, k8s examples, Grafana dashboard, docs, tests (unit, integration with test pages), lab runs, release 1.0.0.
