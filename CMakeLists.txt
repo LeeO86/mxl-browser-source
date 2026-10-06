@@ -59,6 +59,7 @@ if(MBS_BUILD_TESTS)
     add_executable(unit-tests
         tests/unit/test_main.cpp
         tests/unit/test_audio.cpp
+        tests/unit/test_config.cpp
         tests/unit/test_convert.cpp
         tests/unit/test_engine.cpp
         tests/unit/test_framestore.cpp

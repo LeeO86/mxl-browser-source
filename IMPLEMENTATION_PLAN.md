@@ -95,3 +95,24 @@ More decisions:
 Next, in order:
 1. AMWA results in CI after the DNS-SD domain fix; integration tests in CI (`tests/integration/ci.sh`, including the G14 lifecycle) passed on the lab.
 2. The G1–G14 table, CHANGELOG and THIRD_PARTY_NOTICES, 1 h soak (repeat/skip pairs), release 1.0.0.
+
+## 4. Platform guideline G1–G14
+
+Checked against `mxl-poc-platform/docs/requests/leeo86-v1-readiness.md`.
+
+| # | Requirement | Status | How |
+| --- | --- | --- | --- |
+| G1 | settings from env and the config document, env > file > default, unknown env ignored, invalid → 78, one table, state under `/config`, secrets not logged | met | `src/config/config.cpp`, SPEC §11 table, `BROWSER_STATE_DIR`, `BROWSER_API_TOKEN` marked secret; `tests/unit/test_config.cpp` |
+| G2 | `MXL_DOMAIN_SCAN_PATH`, `MXL_OUTPUT_DOMAIN_DIR`/`_ID`, a different existing id is logged and kept, domain files written once, history configurable | met | `src/mxlio/setup.cpp`, `MXL_HISTORY_DURATION_NS`; `tests/unit/test_setup.cpp` |
+| G3 | `NMOS_SEED` → every id (UUIDv5), `NMOS_LABEL`, `NMOS_TAGS` on node and device | met | `src/nmos/ids.cpp`, `tests/unit/test_ids.cpp` |
+| G4 | registry and query address/port, `NMOS_DNS_SD=false` by default switches off browse and advertisement, no Avahi/D-Bus needed then | met | `src/nmos/node.cpp` (`pri`/`highest_pri` = INT_MAX); with DNS-SD on, domain `local.` and `libnss-mdns` |
+| G5 | only IP literals announced, from `NMOS_HOST_ADDRESS` (default first non-loopback IPv4) | met | `href_mode` 2, host address checks; `tests/unit/test_config.cpp` |
+| G6 | every port configurable, busy port → 75 | met | `WEB_PORT`, `NMOS_PORT` (+1 reserved), `BROWSER_DEVTOOLS_PORT` (loopback); checked before anything is created (`mbs-refusals`) |
+| G7 | `/livez`, `/readyz` (registered when a registry is configured), `/metrics` with prefix `mxl_browser_source_` | met | `src/app/api.cpp`; CI `ci.sh` waits for `/readyz` with a registry |
+| G8 | SIGTERM within `SHUTDOWN_TIMEOUT_S`: stop media, deregister, remove the own domain with `MXL_CLEANUP_ON_EXIT=true`, exit 143 | met | `Application::run`/`shutdown`; CI `ci.sh` lifecycle (node 404 in the Query API, `domain_removed`, exit 143) |
+| G9 | senders report active `mxl_domain_id`/`mxl_flow_id`, `master_enable` stops cleanly, state survives a restart | met (senders only; no receivers) | real ids in `/active` from the start; `tests/integration/nmos_test.py`; AMWA IS-05-01, BCP-007-03-01 |
+| G10 | `GET /api/v1/config/export`, `POST /api/v1/config/import` | met | `src/app/api.cpp`, `docs/api.md`; the API token is not exported |
+| G11 | CI builds, tests, pushes `ghcr.io/leeo86/mxl-browser-source` (`git-<sha7>`, `nightly-dev`, `X.Y.Z`/`X.Y`/`X`), uid 1000, OCI labels, tags never moved | met | `.github/workflows/{ci,container}.yaml`, `docker/Dockerfile`; examples name `1.0.0`, which exists from the release on |
+| G12 | Kubernetes example: pod network, standard env, probes, grace > shutdown timeout, MXL hostPath, writable `/config`, no `hostIPC`, minimal capabilities | met | `deploy/mxl-browser-source{,-gpu}.yaml`; only the own domain mounted (SPEC §15.3) |
+| G13 | README (settings, ports, exit codes, API, platform), CHANGELOG with 1.0.0, SPEC matches the code | met at release | README, `docs/api.md`, `CHANGELOG.md` |
+| G14 | unit tests for configuration and new behaviour, integration lifecycle test, CI green | met when CI is green | `tests/unit/`, `tests/integration/ci.sh`, `tests/nmos/amwa.sh` |
