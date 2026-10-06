@@ -94,7 +94,8 @@ More decisions:
 
 Next, in order:
 1. Done in CI (run 37464513972): AMWA IS-04-01 (44 pass), IS-05-01, IS-05-02, BCP-007-03-01 all without failures (IS-04-01 needed `libnss-mdns` too: the node browsed the mock registry but could not resolve its `.local` name); `tests/integration/ci.sh` with the G14 lifecycle passes.
-2. 1 h soak (repeat/skip pairs), release 1.0.0.
+2. Release 1.0.0 (owner decision 2026-10-06) before acceptance criterion 2 (0 repeated grains in 1 h) is met; see below.
+3. 1.0.x: no repeat/skip pairs. Each is a paint that arrives just after its tick (the next tick takes a newer paint). `BROWSER_FRAME_LEAD` does not help: it only enters the automatic video delay. Candidate: wait a few milliseconds at the tick when an animated page's paint for the outstanding BeginFrame is due, then 1 h soaks in GPU and software mode.
 
 ## 4. Platform guideline G1–G14
 
