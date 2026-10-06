@@ -99,14 +99,15 @@ RUN cmake -S /src -B /src/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 FROM ${UBUNTU} AS runtime
 ARG MXL_REF=218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
 ARG CEF_VERSION=144.0.21+g4f5b28c+chromium-144.0.7559.248
-# CEF's libraries without GTK or X (spike S3: headless Ozone), certutil, fonts.
+# CEF's libraries without GTK or X (spike S3: headless Ozone), certutil, fonts; libnss-mdns resolves
+# the .local names of DNS-SD services (NMOS_DNS_SD=true; unused when it is off).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl \
         libnss3 libnspr4 libnss3-tools libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 libxkbcommon0 \
         libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libxshmfence1 libasound2t64 libpango-1.0-0 \
         libcairo2 libx11-6 libx11-xcb1 libxcb1 libdbus-1-3 libexpat1 libegl1 libgl1 libgles2 libvulkan1 libglib2.0-0t64 \
         fontconfig fonts-dejavu-core fonts-liberation2 fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-        libcpprest2.10 libboost-chrono1.83.0t64 libboost-thread1.83.0 libssl3t64 libavahi-compat-libdnssd1 libsamplerate0 \
+        libcpprest2.10 libboost-chrono1.83.0t64 libboost-thread1.83.0 libssl3t64 libavahi-compat-libdnssd1 libnss-mdns libsamplerate0 \
     && rm -rf /var/lib/apt/lists/*
 # CEF next to the binaries (resources and locales are found relative to the executable).
 COPY --from=cef /opt/cef/Release/ /usr/local/lib/mxl-browser-source/
