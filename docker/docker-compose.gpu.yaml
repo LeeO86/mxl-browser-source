@@ -1,0 +1,17 @@
+# Overlay for a host with an NVIDIA GPU and the container toolkit (SPEC §15.2):
+#   docker compose -f docker/docker-compose.host.yaml -f docker/docker-compose.gpu.yaml up
+# `graphics` makes the toolkit mount libEGL_nvidia; the image has the glvnd vendor file for it.
+# /api/v1/info shows the renderer Chromium really uses (render_degraded when it is software).
+services:
+  browser-source:
+    environment:
+      BROWSER_RENDER: gpu
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

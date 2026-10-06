@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent;overflow:hidden}</style></head>
+<body>
+<div style="position:absolute;left:100px;top:100px;width:200px;height:200px;background:rgba(255,0,0,0.5)"></div>
+<canvas id="c" width="600" height="300" style="position:absolute;left:400px;top:100px"></canvas>
+<div id="n" style="position:absolute;left:100px;top:400px;font:80px sans-serif;color:white">0</div>
+<script>
+let r = 'no webgl';
+const g = document.createElement('canvas').getContext('webgl');
+if (g) { const e = g.getExtension('WEBGL_debug_renderer_info'); r = e ? g.getParameter(e.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER); }
+const ctx = document.getElementById('c').getContext('2d');
+let frames = 0;
+function tick(t) {
+  frames++;
+  document.getElementById('n').textContent = frames;
+  ctx.clearRect(0, 0, 600, 300);
+  for (let i = 0; i < 40; i++) { ctx.fillStyle = `hsl(${(frames * 3 + i * 9) % 360},80%,50%)`; ctx.fillRect((frames * 7 + i * 15) % 600, i * 7, 30, 30); }
+  if (frames % 25 === 0) document.title = 'r:' + r + '|rAF:' + frames;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+try { const ac = new AudioContext({sampleRate: 48000}); const o = ac.createOscillator(); o.frequency.value = 1000;
+  const gn = ac.createGain(); gn.gain.value = 0.1; o.connect(gn).connect(ac.destination); o.start(); } catch (e) { document.title = 'audio error ' + e; }
+</script>
+</body></html>

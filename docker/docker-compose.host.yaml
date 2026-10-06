@@ -1,0 +1,33 @@
+# One machine with a host MXL root (a tmpfs at /Volumes/mxl) and a facility registry; not the
+# platform Deployment (that runs on the pod network, deploy/mxl-browser-source.yaml). SPEC §15.2.
+#   NMOS_REGISTRY_ADDRESS=10.0.0.5 docker compose -f docker/docker-compose.host.yaml up
+# GPU: add -f docker/docker-compose.gpu.yaml.
+services:
+  browser-source:
+    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.0.0}
+    network_mode: host
+    user: "1000:1000"
+    shm_size: 1gb
+    tmpfs: [/tmp]
+    ulimits:
+      nofile: 65536
+    cap_add: [SYS_NICE] # SCHED_FIFO for the tick thread (optional)
+    volumes:
+      - /Volumes/mxl:/Volumes/mxl
+      - browser-config:/config
+    environment:
+      NMOS_SEED: ${NMOS_SEED:-browser-source-1}
+      NMOS_REGISTRY_ADDRESS: ${NMOS_REGISTRY_ADDRESS:-127.0.0.1}
+      NMOS_REGISTRY_PORT: ${NMOS_REGISTRY_PORT:-3210}
+      NMOS_HOST_ADDRESS: ${NMOS_HOST_ADDRESS:-}
+      NMOS_DNS_SD: "false"
+      NMOS_PORT: "3312"
+      WEB_PORT: "8160"
+      MXL_DOMAIN_SCAN_PATH: /Volumes/mxl
+      MXL_OUTPUT_DOMAIN_DIR: /Volumes/mxl/browser-source
+      MXL_CLEANUP_ON_EXIT: "true"
+      BROWSER_RENDER: auto
+      SHUTDOWN_TIMEOUT_S: "10"
+    stop_grace_period: 20s
+volumes:
+  browser-config:

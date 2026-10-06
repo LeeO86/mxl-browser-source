@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- The slate of BROWSER_ON_PAGE_ERROR=slate: the reason arrives in the fragment. -->
+<html><head><meta charset="utf-8"><title>page error</title>
+<style>
+html,body{margin:0;height:100%;background:#202020;color:#f0f0f0;font:48px/1.3 "DejaVu Sans",sans-serif}
+main{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 8%}
+h1{font-size:72px;margin:0 0 24px;color:#ffb000}
+p{margin:0;font-size:36px;word-break:break-word}
+</style></head>
+<body><main><h1>Page error</h1><p id="reason"></p></main>
+<script>
+document.getElementById("reason").textContent = decodeURIComponent(location.hash.slice(1) || "");
+</script></body></html>

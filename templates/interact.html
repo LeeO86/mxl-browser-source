@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- Interaction (SPEC §17): a button (x 100–500, y 100–300 of 1920×1080) and a text field
+     (x 100–900, y 400–480). Each click, each change of the text and each wheel step is reported
+     through window.mxlBrowserSource.post and drawn, so it also shows in the grains. Each click also
+     toggles a square (x 1600–1800, y 100–300) between black and white: the latency test's marker. -->
+<html><head><meta charset="utf-8"><title>interact</title>
+<style>
+html,body{margin:0;height:100%;background:#102030;color:#fff;font:40px "DejaVu Sans",sans-serif;overflow:hidden}
+#button{position:absolute;left:100px;top:100px;width:400px;height:200px;background:#2a6;border:0;font:inherit;color:#fff}
+#field{position:absolute;left:100px;top:400px;width:800px;height:80px;font:inherit}
+#log{position:absolute;left:100px;top:540px;font-size:32px}
+#marker{position:absolute;left:1600px;top:100px;width:200px;height:200px;background:#000}
+</style></head>
+<body>
+<button id="button">Click</button>
+<input id="field" autocomplete="off">
+<div id="log">clicks 0</div>
+<div id="marker"></div>
+<script>
+let clicks = 0, wheel = 0;
+const post = (o) => { if (window.mxlBrowserSource) window.mxlBrowserSource.post(o); };
+const show = () => { document.getElementById("log").textContent = `clicks ${clicks}, wheel ${wheel}, text "${document.getElementById("field").value}"`; };
+document.getElementById("button").addEventListener("click", () => {
+  clicks++;
+  document.getElementById("marker").style.background = clicks % 2 ? "#fff" : "#000";
+  show();
+  post({clicked: clicks});
+});
+document.getElementById("field").addEventListener("input", (e) => { show(); post({text: e.target.value}); });
+addEventListener("wheel", (e) => { wheel += Math.sign(e.deltaY); show(); post({wheel: wheel}); });
+</script></body></html>

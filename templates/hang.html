@@ -1,0 +1,5 @@
+<!doctype html>
+<!-- A page that hangs (SPEC §17): after 3 s the main thread loops forever. -->
+<html><head><meta charset="utf-8"><title>hang</title></head>
+<body style="margin:0;background:#400;color:#fff;font:60px sans-serif">hanging in 3 s
+<script>setTimeout(() => { for (;;) {} }, 3000);</script></body></html>

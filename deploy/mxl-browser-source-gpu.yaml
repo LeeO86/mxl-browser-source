@@ -1,0 +1,212 @@
+# One browser source on the pod network (SPEC §15.3). An example: the platform's Helm chart lives in
+# the platform repo. Only the own MXL domain is mounted (a directory on the node's tmpfs at
+# /Volumes/mxl). This file: GPU rendering (ANGLE on the NVIDIA GPU, one time slice); without a GPU
+# use deploy/mxl-browser-source.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: browser-source-1
+data:
+  NMOS_SEED: browser-source-1
+  NMOS_LABEL: browser-source-1
+  NMOS_TAGS: '{"urn:x-srf:production":["example"],"urn:x-srf:function":["browser-source"]}'
+  NMOS_REGISTRY_ADDRESS: nmos-registry.nmos.svc
+  NMOS_REGISTRY_PORT: "3210"
+  NMOS_DNS_SD: "false"
+  NMOS_PORT: "3312"
+  WEB_PORT: "8160"
+  MXL_DOMAIN_SCAN_PATH: /Volumes/mxl
+  MXL_OUTPUT_DOMAIN_DIR: /Volumes/mxl/browser-source-1
+  MXL_CLEANUP_ON_EXIT: "true"
+  BROWSER_FORMAT: 1080p50
+  BROWSER_KEY_MODE: v210a
+  BROWSER_AUDIO_CHANNELS: "2"
+  BROWSER_RENDER: gpu
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics # graphics: libEGL_nvidia
+  BROWSER_LABEL: Browser 1
+  SHUTDOWN_TIMEOUT_S: "10"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-source-1
+  labels:
+    app: browser-source-1
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # one NMOS node and one MXL domain per instance: never two pods at once
+  selector:
+    matchLabels:
+      app: browser-source-1
+  template:
+    metadata:
+      labels:
+        app: browser-source-1
+    spec:
+      automountServiceAccountToken: false
+      runtimeClassName: nvidia
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: browser-source
+          image: ghcr.io/leeo86/mxl-browser-source:1.0.0
+          env:
+            - name: NMOS_HOST_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - configMapRef:
+                name: browser-source-1
+          ports:
+            - name: http
+              containerPort: 8160
+            - name: nmos
+              containerPort: 3312
+            - name: nmos-ws
+              containerPort: 3313
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi # includes /dev/shm (medium: Memory)
+              nvidia.com/gpu: 1 # a time slice; about 512 MB of GPU memory (estimate)
+          startupProbe: # CEF start: up to 60 s
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          volumeMounts:
+            - name: mxl-domain
+              mountPath: /Volumes/mxl/browser-source-1
+            - name: config
+              mountPath: /config
+            - name: shm
+              mountPath: /dev/shm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: mxl-domain
+          hostPath:
+            path: /Volumes/mxl/browser-source-1
+            type: DirectoryOrCreate
+        - name: config # the platform uses a PVC (storage class mxl-local)
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi # 2Gi for 2160p
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-source-1
+  labels:
+    app: browser-source-1
+spec:
+  selector:
+    app: browser-source-1
+  ports:
+    - name: http
+      port: 8160
+      targetPort: http
+    - name: nmos
+      port: 3312
+      targetPort: nmos
+    - name: nmos-ws
+      port: 3313
+      targetPort: nmos-ws
+---
+# SPEC §14.4. The namespaces are examples: adjust them to the cluster (RKE2 runs its ingress
+# controller in kube-system; the registry and the crosspoint here run in "nmos").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: browser-source-1
+spec:
+  podSelector:
+    matchLabels:
+      app: browser-source-1
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 8160
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nmos
+      ports:
+        - port: 3312
+        - port: 3313
+    - from: # Prometheus
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8160
+  egress:
+    - to: # DNS
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to: # NMOS registry
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nmos
+    - to: # pages: replace with the graphics servers or the proxy; never the cluster itself
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.42.0.0/16, 10.43.0.0/16, 169.254.0.0/16]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: browser-source-1
+spec:
+  selector:
+    matchLabels:
+      app: browser-source-1
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

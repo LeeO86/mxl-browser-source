@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- Known alpha (SPEC §17): eight columns of known colour and alpha over transparency, then a
+     red alpha ramp 0…255 across the lower half. -->
+<html><head><meta charset="utf-8"><title>transparency</title>
+<style>html,body{margin:0;height:100%;background:transparent}
+.top{display:flex;height:50%}.top div{flex:1}
+.ramp{height:50%;background:linear-gradient(to right,rgba(255,0,0,0),rgba(255,0,0,1))}</style></head>
+<body><div class="top">
+<div style="background:rgba(255,255,255,0)"></div><div style="background:rgba(255,255,255,0.25)"></div>
+<div style="background:rgba(255,255,255,0.5)"></div><div style="background:rgba(255,255,255,0.75)"></div>
+<div style="background:rgba(255,255,255,1)"></div><div style="background:rgba(0,0,0,0.5)"></div>
+<div style="background:rgba(0,0,255,0.5)"></div><div style="background:rgba(0,255,0,1)"></div>
+</div><div class="ramp"></div></body></html>
