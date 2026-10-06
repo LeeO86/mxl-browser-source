@@ -106,6 +106,8 @@ def permissions(events, control):
 
 
 if __name__ == "__main__":
+    # A page left by an earlier run may ask before unload (dialogs.html after a click): leave it first.
+    navigate("blank.html")
     events = ws_connect(HOST, int(PORT), "/api/v1/events")
     control = ws_connect(HOST, int(PORT), "/api/v1/interact")
     ws_send(control, {"type": "hello", "client": "pages_test", "protocol": 1})

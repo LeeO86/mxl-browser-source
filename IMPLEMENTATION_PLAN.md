@@ -76,6 +76,7 @@ The image builds (2.2 GB uncompressed) and starts; `/readyz` turns 200 when the 
 | Click → picture (`tests/integration/latency_test.py`, 10 clicks, `grain_reader change` finds the first grain showing `interact.html`'s marker; latency = T(grain) − TAI of the click, on the lab host) | GPU mode (video delay 4 grains): median 126 ms, max 138 ms; software mode (5 grains): median 126 ms, max 146 ms; budget 150 ms. Every `ack` grain is no later than the first grain that shows the click. The video delay for A/V sync is most of it (80–100 ms). The interaction socket's preview JPEGs delayed the acks in the test; it asks for 1 fps at 160 px |
 | `tests/integration/nmos_test.py` (IS-05 v1.2) | video and audio sender disabled and enabled: active document, `/api/v1/nmos` and `sender_enabled` agree; video flow read with `mxl-bs-grain-reader`: no new grain in 2 s while disabled, 102 in 2 s after enabling. Audio disabled, `docker restart`: still disabled after the restart, video enabled. Fixed on the way: `sender_enabled` was missing until the first IS-05 change (the document holds only changed states); every sender of the configuration is now reported |
 | Renderer probe | One GPU start on the lab reported `render_degraded` (renderer `none`: no WebGL context) and kept it until the restart; the next start had ANGLE on the A16 again. A software answer is now asked again twice, 5 s apart. Checked with `BROWSER_CHROMIUM_FLAGS_APPEND=disable-webgl`: two `render_probe_retry`, then `render_degraded` 11 s after the load; a normal start still reports `gpu` on the first probe |
+| Image size | 2.22 GB → 907 MB: `libcef.so` of the minimal CEF distribution carries its debug symbols (1.5 GB); `strip --strip-unneeded` in the CEF stage leaves 233 MB. The fonts SPEC §15 names stay (the apt layer is 442 MB). Afterwards in GPU mode on the lab: interaction and IME, §4.5 pages, template/crash/hang/DevTools, click → picture (max 148 ms), IS-05 tests all pass |
 | 1 h soak, GPU mode, `counter.html` (`~/mxl-lab/soak/mbs-soak.sh`) | 180 001 grains, 0 missed, 179 978 advances, 11 repeats each followed by a skip of 2 (a paint just after its tick: the tick repeats, the next one takes the newer paint), 0 crashes or hangs, 0.71 cores. SPEC §17 asks for 0 repeated; open |
 
 All conversion changes produce the same bytes as before (unit tests against the previous packers at 19 widths, AVX2 against scalar on runs of opaque and transparent pixels, bands against one pass).
@@ -88,5 +89,5 @@ More decisions:
 - **Logs.** Chromium logs to stderr and to `log_file`; `log_file` is `/dev/null`, otherwise every line appears twice. Chromium's D-Bus errors at start (no bus in the container) are harmless.
 
 Next, in order:
-1. The rest of SPEC §17: AMWA tests.
-2. Image size (fonts-noto-cjk is large), Compose files, Kubernetes examples, Grafana dashboard, integration tests in CI, the G1–G14 table, 1 h soak, release 1.0.0.
+1. The rest of SPEC §17: AMWA results (`tests/nmos/amwa.sh` runs in CI).
+2. Compose files, Kubernetes examples, Grafana dashboard, integration tests in CI, the G1–G14 table, 1 h soak, release 1.0.0.

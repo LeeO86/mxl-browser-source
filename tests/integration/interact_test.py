@@ -38,9 +38,12 @@ def ws_send(sock, obj):
     sock.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
 
 
+_partial = {}  # socket -> bytes of a frame that had not fully arrived when ws_messages returned
+
+
 def ws_messages(sock, seconds):
     """Text messages received within `seconds` (binary frames are skipped)."""
-    out, buf = [], b""
+    out, buf = [], _partial.pop(sock, b"")
     end = time.time() + seconds
     sock.settimeout(0.2)
     while time.time() < end:
@@ -66,6 +69,7 @@ def ws_messages(sock, seconds):
             payload, buf = buf[offset:offset + length], buf[offset + length:]
             if opcode == 0x1:
                 out.append(json.loads(payload))
+    _partial[sock] = buf
     return out
 
 

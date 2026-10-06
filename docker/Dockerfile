@@ -28,9 +28,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN if [ -n "$EXTRA_CA_CERT_B64" ]; then echo "$EXTRA_CA_CERT_B64" | base64 -d > /usr/local/share/ca-certificates/extra.crt && update-ca-certificates; fi
 COPY docker/fetch.sh /usr/local/bin/fetch.sh
 WORKDIR /opt
+# libcef.so ships with debug symbols (1.5 GB): stripped, the dynamic symbols stay for linking.
 RUN url="https://cef-builds.spotifycdn.com/cef_binary_$(echo "$CEF_VERSION" | sed 's/+/%2B/g')_linux64_minimal.tar.bz2" \
     && sh /usr/local/bin/fetch.sh "$url" cef.tar.bz2 "$CEF_SHA1" \
     && mkdir cef && tar xjf cef.tar.bz2 -C cef --strip-components=1 && rm cef.tar.bz2 \
+    && strip --strip-unneeded cef/Release/libcef.so \
     && cmake -S cef -B cef/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && ninja -C cef/build libcef_dll_wrapper \
     && rm -rf cef/build/libcef_dll_wrapper/CMakeFiles
