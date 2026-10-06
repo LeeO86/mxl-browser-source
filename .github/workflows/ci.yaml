@@ -56,10 +56,15 @@ jobs:
             CEF_SHA1=${{ env.CEF_SHA1 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Integration tests (software rendering, SPEC §17)
+        run: tests/integration/ci.sh mxl-browser-source:ci
       - name: AMWA IS-04-01, IS-05-01, IS-05-02, BCP-007-03-01
+        if: always()
         run: tests/nmos/amwa.sh mxl-browser-source:ci
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: amwa
-          path: amwa-artifacts
+          name: test-artifacts
+          path: |
+            it-artifacts
+            amwa-artifacts
