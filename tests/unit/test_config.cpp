@@ -44,7 +44,7 @@ TEST_CASE("defaults")
     auto const loaded = load({}, {}, "host");
     CHECK(loaded.config.webPort == 8160);
     CHECK(loaded.config.format.name == "1080p50");
-    CHECK(loaded.config.keyMode == KeyMode::Off);
+    CHECK(toString(loaded.config.keyMode) == "off"); // not the enum: doctest would call config::toString itself
     CHECK_FALSE(loaded.config.nmosDnsSd);
     CHECK(row(loaded, "WEB_PORT").source == "default");
     CHECK(loaded.table.size() == knownKeys().size());
