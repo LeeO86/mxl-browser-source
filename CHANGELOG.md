@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 - 2026-10-06
+
+- A new `domain_def.json` carries `description` and `tags`, as BCP-007-03 requires (`id`, `label`, `description`, `tags`). The browser source wrote only `id` and `label`, and mxl-st2110-gateway 1.0.2 skipped such domains. An existing file is still not rewritten.
+
 ## 1.0.0 - 2026-10-06
 
 First release: SPECIFICATION is `SPEC.md`, lab results and decisions are in `IMPLEMENTATION_PLAN.md`.

@@ -4,7 +4,7 @@
 # GPU: add -f docker/docker-compose.gpu.yaml.
 services:
   browser-source:
-    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.0.0}
+    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.0.1}
     network_mode: host
     user: "1000:1000"
     shm_size: 1gb

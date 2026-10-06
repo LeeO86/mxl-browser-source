@@ -88,9 +88,12 @@ namespace mbs::mxlio
         }
         else
         {
+            // BCP-007-03 requires id, label, description and tags.
             picojson::object o;
             o["id"] = picojson::value(wantedId);
             o["label"] = picojson::value(label);
+            o["description"] = picojson::value(std::string("Output domain of mxl-browser-source"));
+            o["tags"] = picojson::value(picojson::object{});
             writeFile(def, picojson::value(o).serialize(true));
             out.created = true;
         }

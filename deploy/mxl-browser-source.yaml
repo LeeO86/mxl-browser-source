@@ -53,7 +53,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: browser-source
-          image: ghcr.io/leeo86/mxl-browser-source:1.0.0
+          image: ghcr.io/leeo86/mxl-browser-source:1.0.1
           env:
             - name: NMOS_HOST_ADDRESS
               valueFrom:
