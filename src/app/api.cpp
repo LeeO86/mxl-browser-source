@@ -19,6 +19,7 @@
 #include "picojson/picojson.h"
 #include "util/logging.hpp"
 #include "util/net.hpp"
+#include "util/proc.hpp"
 #include "webui_index.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -309,7 +310,13 @@ namespace mbs::app
             auto const it = stored.find(name);
             m.set("sender_enabled", {{"sender", name}}, it == stored.end() || it->second ? 1 : 0);
         }
-        return m.render();
+        // CPU and memory (SPEC §12): the CEF processes under ours, and the standard process_* names.
+        auto const cef = util::descendantsUsage();
+        m.setCounter("cef_processes_cpu_seconds_total", {}, cef.cpuSeconds);
+        m.set("cef_processes_resident_bytes", {}, static_cast<double>(cef.residentBytes));
+        auto const self = util::selfUsage();
+        return m.render() + "# TYPE process_cpu_seconds_total counter\nprocess_cpu_seconds_total " + std::to_string(self.cpuSeconds) +
+               "\n# TYPE process_resident_memory_bytes gauge\nprocess_resident_memory_bytes " + std::to_string(self.residentBytes) + "\n";
     }
 
     std::string Application::configJson() const

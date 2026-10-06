@@ -34,6 +34,8 @@ if ! pgrep -x avahi-daemon >/dev/null; then
     command -v avahi-daemon >/dev/null || sudo apt-get install -y -qq avahi-daemon >/dev/null
     pgrep -x avahi-daemon >/dev/null || sudo systemctl start avahi-daemon
 fi
+for _ in $(seq 1 20); do pgrep -x avahi-daemon >/dev/null && break; sleep 0.5; done
+echo "avahi: $(pgrep -a avahi-daemon | head -1 || echo 'not running'); $(ls -l /run/dbus/system_bus_socket 2>&1)"
 
 # nmos-testing at the pinned commit
 TOOL="$WORK/nmos-testing"
@@ -66,6 +68,9 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 curl -fs -o /dev/null "http://127.0.0.1:$WEB/livez" || { echo "browser source not live" >&2; exit 1; }
+sleep 5
+echo "container user: $(docker exec "$NAME" id)"
+echo "DNS-SD errors in the log so far: $(docker logs "$NAME" 2>&1 | grep -c "DNSService.*error")"
 
 failed=()
 run_suite() { # <tag> <suite> <args...>

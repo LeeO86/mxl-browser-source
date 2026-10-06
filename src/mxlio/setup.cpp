@@ -55,9 +55,13 @@ namespace mbs::mxlio
         {
             throw RootError("MXL root " + root + " does not exist: mount a tmpfs there (or set MXL_DOMAIN_SCAN_PATH)");
         }
-        if (requireTmpfs && !isTmpfs(root))
+        // The flows live in `dir`. A pod mounts only that directory (a hostPath on the node's tmpfs,
+        // SPEC §15.3), so a tmpfs at `dir` qualifies as well as a tmpfs root. Checked before
+        // anything is created.
+        if (requireTmpfs && !isTmpfs(root) && !(fs::is_directory(dir, ec) && isTmpfs(dir)))
         {
-            throw RootError("MXL root " + root + " is not a tmpfs: mount one there, or set BROWSER_REQUIRE_TMPFS=false for tests");
+            throw RootError("MXL domain " + dir + " is not on a tmpfs: mount one at " + root + " or at " + dir +
+                            ", or set BROWSER_REQUIRE_TMPFS=false for tests");
         }
         fs::create_directories(dir, ec);
         if (ec)

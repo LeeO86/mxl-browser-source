@@ -1,0 +1,403 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum by (instance, flow) (rate(mxl_browser_source_grains_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} {{flow}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Grains per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (instance, reason) (rate(mxl_browser_source_repeated_grains_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} repeated {{reason}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance) (rate(mxl_browser_source_missed_grains_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} missed",
+          "refId": "B"
+        }
+      ],
+      "title": "Repeated and missed grains per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (instance, le) (rate(mxl_browser_source_paint_latency_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "{{instance}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mxl_browser_source_paint_latency_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "{{instance}} p95",
+          "refId": "B"
+        }
+      ],
+      "title": "Paint latency (BeginFrame → OnPaint)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mxl_browser_source_convert_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "{{instance}} conversion",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, le) (rate(mxl_browser_source_commit_lateness_seconds_bucket{instance=~\"$instance\"}[1m])))",
+          "legendFormat": "{{instance}} commit lateness",
+          "refId": "B"
+        }
+      ],
+      "title": "Conversion and commit lateness (p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_audio_drift_ppm{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Audio drift (ppm)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_audio_buffer_seconds{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} buffer",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(mxl_browser_source_audio_underruns_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} underruns/s",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(mxl_browser_source_audio_overruns_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} overruns/s",
+          "refId": "C"
+        }
+      ],
+      "title": "Audio buffer and under/overruns",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_page_state{instance=~\"$instance\"} == 1",
+          "legendFormat": "{{instance}} {{state}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Page state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (instance, reason) (increase(mxl_browser_source_renderer_crashes_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{instance}} renderer {{reason}}",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(mxl_browser_source_page_hangs_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} hangs",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(mxl_browser_source_gpu_process_crashes_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} GPU process",
+          "refId": "C"
+        }
+      ],
+      "title": "Crashes and hangs (5 min)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "rate(process_cpu_seconds_total{instance=~\"$instance\"}[1m])",
+          "legendFormat": "{{instance}} app",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(mxl_browser_source_cef_processes_cpu_seconds_total{instance=~\"$instance\"}[1m])",
+          "legendFormat": "{{instance}} CEF processes",
+          "refId": "B"
+        }
+      ],
+      "title": "CPU (cores)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} app",
+          "refId": "A"
+        },
+        {
+          "expr": "mxl_browser_source_cef_processes_resident_bytes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} CEF processes (summed RSS)",
+          "refId": "B"
+        }
+      ],
+      "title": "Memory (resident)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_interact_sessions{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} controlling sessions",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (instance, type, result) (rate(mxl_browser_source_interaction_events_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} {{type}} {{result}}/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Interaction",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "id": 12,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_render_degraded{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} render degraded",
+          "refId": "A"
+        },
+        {
+          "expr": "mxl_browser_source_sender_enabled{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} sender {{sender}} enabled",
+          "refId": "B"
+        },
+        {
+          "expr": "mxl_browser_source_nmos_registered{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} registered",
+          "refId": "C"
+        }
+      ],
+      "title": "Render, senders, registration",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "mxl",
+    "browser-source"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(mxl_browser_source_info, instance)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "MXL Browser Source",
+  "uid": "mxl-browser-source",
+  "version": 1
+}

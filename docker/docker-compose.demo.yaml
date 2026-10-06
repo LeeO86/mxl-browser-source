@@ -1,0 +1,148 @@
+# Single machine: an nmos-cpp registry, the browser source writing into a tmpfs MXL root,
+# mxl-webrtc-monitor (with MediaMTX) to watch the output, Prometheus and Grafana (SPEC §15.2).
+#
+#   docker compose -f docker/docker-compose.demo.yaml up
+#
+# The route service plays the lower third and connects the monitor's channel 1 to the browser
+# source over IS-05. Then open the monitor at http://127.0.0.1:8100/, the browser source at
+# http://127.0.0.1:8160/ and Grafana at http://127.0.0.1:3000/. GPU: add docker-compose.gpu.yaml.
+# Host networking: the ports below must be free (3210-3212, 3312, 3242, 8100, 8160, 8554, 8888,
+# 8889, 9997, 9998, 9090, 3000).
+services:
+  # The platform's registry image (mxl-poc-platform versions.yml). Its mDNS responder cannot be
+  # switched off: it announces itself on the local network; the browser source uses the address.
+  registry:
+    image: docker.io/gemini2350/nmos-cpp-registry:sha-53481ff@sha256:3c2fa0793ce336e4176487878758efcbd5c61414c5b90433f3758851615f1c91
+    network_mode: host
+    environment:
+      RUN_MQTT: "FALSE"
+      ADVERTISE_MQTT: "FALSE"
+    volumes:
+      - ./registry.json:/home/registry.json:ro
+
+  browser-source:
+    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.0.0}
+    network_mode: host
+    user: "1000:1000"
+    shm_size: 1gb
+    tmpfs: [/tmp]
+    ulimits:
+      nofile: 65536
+    depends_on: [registry]
+    volumes:
+      - mxl:/Volumes/mxl
+      - browser-config:/config
+    environment:
+      NMOS_SEED: demo-browser-source
+      NMOS_REGISTRY_ADDRESS: 127.0.0.1
+      NMOS_REGISTRY_PORT: "3210"
+      NMOS_HOST_ADDRESS: ${NMOS_HOST_ADDRESS:-} # empty: the host's first IPv4 (loopback is refused)
+      NMOS_PORT: "3312"
+      WEB_PORT: "8160"
+      MXL_OUTPUT_DOMAIN_DIR: /Volumes/mxl/browser-source
+      MXL_CLEANUP_ON_EXIT: "true"
+      BROWSER_RENDER: software
+      BROWSER_LABEL: Demo
+      SHUTDOWN_TIMEOUT_S: "10"
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.20.1
+    network_mode: host
+    volumes:
+      - monitor-config:/config
+    # The image has no shell: MediaMTX exits until the monitor has written its config.
+    command: ["/config/mediamtx.yml"]
+    restart: unless-stopped
+
+  monitor:
+    image: ghcr.io/leeo86/mxl-webrtc-monitor:1.0.3
+    network_mode: host
+    depends_on: [registry]
+    volumes:
+      - mxl:/Volumes/mxl:ro
+      - monitor-config:/config
+    environment:
+      HOST_ID: demo
+      MXL_DOMAIN_SCAN_PATH: /Volumes/mxl
+      MONITOR_CHANNELS: "1"
+      ENCODER: x264
+      NMOS_REGISTRY_ADDRESS: 127.0.0.1
+      NMOS_REGISTRY_PORT: "3210"
+      NMOS_DNS_SD: "false"
+      NMOS_PORT: "3242"
+      WEB_PORT: "8100"
+      MEDIAMTX_CONFIG_PATH: /config/mediamtx.yml
+      MEDIAMTX_RTSP_URL: rtsp://127.0.0.1:8554
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
+      MONITOR_WHEP_PUBLIC_URL: http://127.0.0.1:8889
+      MONITOR_HLS_PUBLIC_URL: http://127.0.0.1:8888
+      STATE_DIR: /config
+      SHUTDOWN_TIMEOUT_S: "10"
+
+  # One shot: lower third on air, monitor channel 1 (video and audio) routed to the browser source.
+  route:
+    image: python:3.12-slim
+    network_mode: host
+    depends_on: [browser-source, monitor]
+    restart: on-failure
+    command:
+      - python3
+      - -c
+      - |
+        import json, time, urllib.request
+        def http(method, url, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                text = r.read().decode()
+                return json.loads(text) if text else None
+        for _ in range(120):
+            try:
+                src = http("GET", "http://127.0.0.1:8160/api/v1/nmos")
+                receivers = http("GET", "http://127.0.0.1:3242/x-nmos/node/v1.3/receivers")
+                if receivers:
+                    break
+            except OSError:
+                pass
+            time.sleep(1)
+        http("POST", "http://127.0.0.1:8160/api/v1/source/navigate", {"url": "https://templates.local/lower-third.html"})
+        time.sleep(3)
+        http("POST", "http://127.0.0.1:8160/api/v1/template/play")
+        for kind, sender in (("video", "video"), ("audio", "audio")):
+            rx = next(r for r in receivers if r["format"].endswith(kind))
+            http("PATCH", f"http://127.0.0.1:3242/x-nmos/connection/v1.2/single/receivers/{rx['id']}/staged",
+                 {"master_enable": True, "activation": {"mode": "activate_immediate"},
+                  "transport_params": [{"mxl_domain_id": src["domain_id"], "mxl_flow_id": src["senders"][sender]["flow_id"]}]})
+            print(f"{rx['label']} <- browser source {sender}", flush=True)
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    network_mode: host
+    volumes:
+      - ../deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    network_mode: host
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SERVER_HTTP_PORT: "3000"
+    volumes:
+      - ../deploy/grafana/mxl-browser-source.json:/var/lib/grafana/dashboards/mxl-browser-source.json:ro
+      - ../deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+
+volumes:
+  # The MXL root must be a tmpfs (the browser source refuses anything else).
+  mxl:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1g,mode=1777
+  browser-config:
+  # The monitor (uid 1000) writes MediaMTX's config here; its image has no /config to copy from.
+  monitor-config:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=16m,uid=1000,gid=1000

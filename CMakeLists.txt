@@ -47,6 +47,7 @@ add_library(mbs-core STATIC
     src/util/logging.cpp
     src/util/metrics.cpp
     src/util/net.cpp
+    src/util/proc.cpp
     src/util/uuid.cpp
 )
 target_include_directories(mbs-core PUBLIC src third_party)
@@ -65,6 +66,8 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_ids.cpp
         tests/unit/test_interact.cpp
         tests/unit/test_keymap.cpp
+        tests/unit/test_proc.cpp
+        tests/unit/test_setup.cpp
         tests/unit/test_tick.cpp
         tests/unit/test_urlpolicy.cpp
     )

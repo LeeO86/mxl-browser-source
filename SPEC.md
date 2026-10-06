@@ -597,11 +597,11 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `sender_enabled` | gauge | `sender` |
 | `nmos_registered` | gauge | – |
 
-Process CPU and memory come from the standard `process_*` metrics of the function plus the summed RSS of the CEF child processes (`cef_processes_resident_bytes`). Grafana dashboard: `deploy/grafana/mxl-browser-source.json` (grains and repeats, paint latency p50/p95, conversion time, audio drift and fill, page state, crashes, CPU and memory, interaction), copied into the platform's `dashboards/` by hand with the source commit.
+Process CPU and memory come from the standard `process_*` metrics of the function plus the summed RSS (`cef_processes_resident_bytes`) and CPU time (`cef_processes_cpu_seconds_total`, including exited processes their parents reaped, so a renderer crash does not reset it) of the CEF processes below the function's process. Grafana dashboard: `deploy/grafana/mxl-browser-source.json` (grains and repeats, paint latency p50/p95, conversion time, audio drift and fill, page state, crashes, CPU and memory, interaction), copied into the platform's `dashboards/` by hand with the source commit.
 
 ## 13. Process lifecycle, failure and recovery
 
-Startup order: parse and validate settings (78) → check the MXL root is tmpfs (78) → state directory (75) → web and NMOS ports free (75; checked before anything is created, so a busy port leaves no domain behind) → own domain (78 if it cannot be created) → raise `RLIMIT_NOFILE` → import CA files into the NSS database, clear a stale cache and singleton locks (`ephemeral` profile) → `CefInitialize` (75 on failure) → create the browser → open MXL writers → bind web and NMOS ports and verify the NMOS listener (75) → start the tick thread → register the node → ready.
+Startup order: parse and validate settings (78) → check the own domain is on a tmpfs: the MXL root, or a tmpfs at the domain directory as when a pod mounts only its domain (§15.3) (78) → state directory (75) → web and NMOS ports free (75; checked before anything is created, so a busy port leaves no domain behind) → own domain (78 if it cannot be created) → raise `RLIMIT_NOFILE` → import CA files into the NSS database, clear a stale cache and singleton locks (`ephemeral` profile) → `CefInitialize` (75 on failure) → create the browser → open MXL writers → bind web and NMOS ports and verify the NMOS listener (75) → start the tick thread → register the node → ready.
 
 | Failure | Detection | Behaviour | Recovery |
 | --- | --- | --- | --- |

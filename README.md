@@ -6,7 +6,7 @@ Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writ
 
 ## Run it
 
-The MXL root must be a tmpfs (the process refuses anything else with exit 78). On one host with Docker:
+The own MXL domain must be on a tmpfs: the MXL root, or a tmpfs mounted at the domain directory (anything else exits 78). On one host with Docker:
 
 ```sh
 docker run -d --name browser --network host --shm-size 1g -u 1000:1000 \
@@ -40,7 +40,23 @@ The most used settings (all of them, with defaults and "restart required" marker
 
 The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
-Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL cannot start, 78 invalid configuration or MXL root not a tmpfs, 143 SIGTERM/SIGINT (also when the shutdown budget ran out).
+Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL cannot start, 78 invalid configuration or the own domain not on a tmpfs, 143 SIGTERM/SIGINT (also when the shutdown budget ran out).
+
+### Docker Compose
+
+- `docker/docker-compose.demo.yaml`: one machine with the platform's nmos-cpp registry, the browser source on a tmpfs MXL root, mxl-webrtc-monitor with MediaMTX, Prometheus and Grafana. A one-shot service puts the lower third on air and routes the monitor to it over IS-05: `docker compose -f docker/docker-compose.demo.yaml up`, then open the monitor at `http://127.0.0.1:8100/`, the browser source at `:8160` and Grafana at `:3000`.
+- `docker/docker-compose.host.yaml`: the browser source alone, host network, `/Volumes/mxl` and a facility registry (`NMOS_REGISTRY_ADDRESS`).
+- `docker/docker-compose.gpu.yaml`: overlay for either file with an NVIDIA device reservation and `BROWSER_RENDER=gpu`.
+
+### Kubernetes
+
+`deploy/mxl-browser-source.yaml` (software rendering) and `deploy/mxl-browser-source-gpu.yaml` (one GPU time slice) are examples: ConfigMap, Deployment (pod network, uid 1000, read-only root filesystem, all capabilities dropped, only the own MXL domain mounted from the node's tmpfs), Service, NetworkPolicy and ServiceMonitor. The platform's chart lives in the platform repository. `docs/single-node-rke2.md` sets up a one-machine test cluster.
+
+### Metrics and Grafana
+
+`/metrics` has grains, repeats and misses, paint latency, conversion and commit lateness, audio, page state, crashes, interaction, sender and registration state, and CPU and memory: `process_cpu_seconds_total` and `process_resident_memory_bytes` of the process, `mxl_browser_source_cef_processes_cpu_seconds_total` and `_resident_bytes` of the CEF processes below it. The Grafana dashboard is `deploy/grafana/mxl-browser-source.json`.
+
+Image size: about 900 MB uncompressed (CEF's `libcef.so` stripped of its debug symbols; the fonts take about 440 MB with the system libraries).
 
 ## Lab results so far (A16 lab host, 2× Xeon Gold 6136, 1080p50, v210a)
 
@@ -51,6 +67,7 @@ Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL c
 | `tone.html` | −20.01 dBFS on both channels, no underruns |
 | `avsync.html` (flash and 1 kHz burst in the same frame) | audio 16 ms after video (12–22 ms) |
 | conversion BGRA → v210 + v210a, 4 threads | 2.2 ms per frame |
+| click → first grain showing it (`tests/integration/latency_test.py`) | GPU: median 126 ms, max 138 ms; software: max 146 ms (budget 150 ms) |
 
 ## Build
 

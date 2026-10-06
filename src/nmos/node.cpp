@@ -303,10 +303,12 @@ namespace mbs::nmos
                     ::nmos::experimental::node_implementation()
                         .on_parse_transport_file([](::nmos::resource const&, ::nmos::resource const&, utility::string_t const&, utility::string_t const&,
                                                      slog::base_gate&) -> web::json::value { throw std::runtime_error("MXL does not use a transport file"); })
-                        .on_resolve_auto([this](::nmos::resource const&, ::nmos::resource const&, web::json::value& params) {
+                        .on_resolve_auto([this](::nmos::resource const& sender, ::nmos::resource const&, web::json::value& params) {
                             if (params.is_array() && params.size() > 0)
                             {
                                 ::nmos::details::resolve_auto(params.at(0), U("mxl_domain_id"), [this] { return web::json::value::string(us(settings.domainId)); });
+                                // BCP-007-03: a Sender's active parameters never keep "auto" (AMWA IS-05-01 test_11_01).
+                                ::nmos::details::resolve_auto(params.at(0), U("mxl_flow_id"), [&sender] { return sender.data.at(U("flow_id")); });
                             }
                         })
                         .on_set_transportfile([](::nmos::resource const&, ::nmos::resource const&, web::json::value& file) { file = web::json::value::null(); })

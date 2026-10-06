@@ -9,7 +9,7 @@
 
 namespace mbs::mxlio
 {
-    /// The MXL root is missing or not a tmpfs (exit 78).
+    /// The MXL root is missing, or neither it nor the domain directory is on a tmpfs (exit 78).
     class RootError : public std::runtime_error
     {
     public:
@@ -25,7 +25,7 @@ namespace mbs::mxlio
         bool mismatch = false; // an existing domain_def.json had another id (kept)
     };
 
-    /// Checks the root (when requireTmpfs), creates `dir` with domain_def.json and options.json
+    /// Checks the root or `dir` is a tmpfs (when requireTmpfs), creates `dir` with domain_def.json and options.json
     /// when missing, never rewrites them. Throws RootError, or std::runtime_error on I/O errors.
     DomainSetup prepareDomain(std::string const& root, std::string const& dir, std::string const& wantedId, std::string const& label,
         std::uint64_t historyNs, bool requireTmpfs);

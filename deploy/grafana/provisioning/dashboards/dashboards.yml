@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: mxl
+    folder: MXL
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
