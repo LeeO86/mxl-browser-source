@@ -162,7 +162,7 @@ namespace mbs::app
     }
 
     // ------------------------------------------------------------------------------------
-    // Startup (SPEC §13): settings → tmpfs → state dir → own domain → RLIMIT_NOFILE → CA,
+    // Startup (SPEC §13): settings → tmpfs → state dir → ports free → own domain → RLIMIT_NOFILE → CA,
     // cache → CefInitialize → browser → writers → ports and NMOS listener → tick → register.
 
     int Application::run()
@@ -171,6 +171,16 @@ namespace mbs::app
         installSignalHandlers();
 
         prepareState();
+        // A busy port fails here, before the own domain and CEF exist: nothing is left behind,
+        // and nmos-cpp is never started on a port it cannot get (its shutdown then hangs).
+        for (auto const& [name, port] : {std::pair{"WEB_PORT", _cfg.webPort}, std::pair{"NMOS_PORT", _cfg.nmosPort}})
+        {
+            std::string error;
+            if (!util::portFree(port, error))
+            {
+                throw StartupError(75, std::string(name) + ": " + error);
+            }
+        }
         prepareMxl();
         prepareBrowserEnvironment();
         startCef();

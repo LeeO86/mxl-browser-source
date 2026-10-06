@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -101,6 +102,29 @@ namespace mbs::util
         }
         ::closedir(dir);
         return owned;
+    }
+
+    bool portFree(int port, std::string& error)
+    {
+        int const fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0)
+        {
+            error = std::string("socket failed: ") + std::strerror(errno);
+            return false;
+        }
+        int yes = 1;
+        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(static_cast<std::uint16_t>(port));
+        bool const free = ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+        if (!free)
+        {
+            error = "bind failed on port " + std::to_string(port) + ": " + std::strerror(errno);
+        }
+        ::close(fd);
+        return free;
     }
 
     int connectTcp(std::string const& host, int port, int timeoutMs)

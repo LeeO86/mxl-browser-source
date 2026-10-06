@@ -10,6 +10,7 @@
 #include <string>
 
 #include "ops/httpserver.hpp"
+#include "util/net.hpp"
 
 using namespace mbs::ops;
 
@@ -128,4 +129,16 @@ TEST_CASE("a busy port fails to start")
     REQUIRE(a.start(0, error));
     CHECK_FALSE(b.start(a.port(), error));
     CHECK(error.find("bind failed") != std::string::npos);
+}
+
+TEST_CASE("the start-up port check sees a busy port and a free one")
+{
+    HttpServer a([](HttpRequest const&, HttpResponse&) {});
+    std::string error;
+    REQUIRE(a.start(0, error));
+    int const port = a.port();
+    CHECK_FALSE(mbs::util::portFree(port, error));
+    CHECK(error.find("bind failed on port " + std::to_string(port)) != std::string::npos);
+    a.stop();
+    CHECK(mbs::util::portFree(port, error));
 }

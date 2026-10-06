@@ -601,7 +601,7 @@ Process CPU and memory come from the standard `process_*` metrics of the functio
 
 ## 13. Process lifecycle, failure and recovery
 
-Startup order: parse and validate settings (78) → check the MXL root is tmpfs (78) → state directory (75) → own domain (78 if it cannot be created) → raise `RLIMIT_NOFILE` → import CA files into the NSS database, clear a stale cache and singleton locks (`ephemeral` profile) → `CefInitialize` (75 on failure) → create the browser → open MXL writers → bind web and NMOS ports and verify the NMOS listener (75) → start the tick thread → register the node → ready.
+Startup order: parse and validate settings (78) → check the MXL root is tmpfs (78) → state directory (75) → web and NMOS ports free (75; checked before anything is created, so a busy port leaves no domain behind) → own domain (78 if it cannot be created) → raise `RLIMIT_NOFILE` → import CA files into the NSS database, clear a stale cache and singleton locks (`ephemeral` profile) → `CefInitialize` (75 on failure) → create the browser → open MXL writers → bind web and NMOS ports and verify the NMOS listener (75) → start the tick thread → register the node → ready.
 
 | Failure | Detection | Behaviour | Recovery |
 | --- | --- | --- | --- |
