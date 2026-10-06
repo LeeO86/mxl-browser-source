@@ -9,6 +9,8 @@ on:
 env:
   CEF_VERSION: 144.0.21+g4f5b28c+chromium-144.0.7559.248
   CEF_SHA1: e6233049cec12ba108b4b920b499e2a082ffd0ae
+  # AMWA nmos-testing (tests/nmos/amwa.sh reads it from here); same commit as mxl-st2110-gateway.
+  NMOS_TESTING_REF: 90018513758e6fbc096c26d7ef001f700b28b510
 
 jobs:
   dockerfile:
@@ -36,7 +38,8 @@ jobs:
           ./build/unit-tests
 
   image:
-    # The whole image (MXL, nmos-cpp, CEF, the binaries; the unit tests run again inside).
+    # The whole image (MXL, nmos-cpp, CEF, the binaries; the unit tests run again inside), then the
+    # AMWA suites against it (SPEC §17; multicast DNS-SD needs an isolated host like this runner).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +49,17 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
+          load: true
+          tags: mxl-browser-source:ci
           build-args: |
             CEF_VERSION=${{ env.CEF_VERSION }}
             CEF_SHA1=${{ env.CEF_SHA1 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: AMWA IS-04-01, IS-05-01, IS-05-02, BCP-007-03-01
+        run: tests/nmos/amwa.sh mxl-browser-source:ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: amwa
+          path: amwa-artifacts
