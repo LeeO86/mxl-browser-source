@@ -4,6 +4,8 @@
 //   grain_reader counter --domain DIR --flow UUID --width W --seconds S
 //     Decodes counter.html's 32-bit bar code (top 16 lines, bit i = 60 px block) from every
 //     grain and reports advances (+1), repeats (+0) and skips (> +1).
+//   grain_reader change --domain DIR --flow UUID --width W --x X --y Y --seconds S
+//     Index of the first grain whose luma at (X, Y) differs from the head grain's ("CHANGE grain=").
 //   grain_reader sample --domain DIR --flow UUID --width W --height H --x X --y Y
 //     Y, Cb, Cr (and the v210a alpha) of one pixel of the newest grain.
 //   grain_reader avsync --domain DIR --video UUID --audio UUID --width W --rate N/D --seconds S
@@ -102,6 +104,52 @@ namespace
         std::printf("\n");
         mxlReleaseFlowReader(instance, reader);
         return 0;
+    }
+
+    // The first grain after the head grain whose luma at (x, y) differs from the head grain's by
+    // more than 200 codes (interaction latency, SPEC §2.5).
+    int change(mxlInstance instance, std::string const& flow, int width, int x, int y, int seconds)
+    {
+        auto* reader = openReader(instance, flow);
+        if (reader == nullptr)
+        {
+            std::fprintf(stderr, "no reader for %s\n", flow.c_str());
+            return 1;
+        }
+        std::size_t const rowBytes = static_cast<std::size_t>((width + 47) / 48) * 128;
+        std::uint64_t index = headIndex(reader);
+        int first = -1;
+        int rc = 1;
+        auto const end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        while (std::chrono::steady_clock::now() < end)
+        {
+            mxlGrainInfo info{};
+            std::uint8_t* payload = nullptr;
+            if (mxlFlowReaderGetGrain(reader, index, 200'000'000, &info, &payload) != MXL_STATUS_OK || payload == nullptr)
+            {
+                index = std::max(index + 1, headIndex(reader));
+                continue;
+            }
+            int const value = luma(payload + static_cast<std::size_t>(y) * rowBytes, x);
+            if (first < 0)
+            {
+                first = value;
+            }
+            else if (std::abs(value - first) > 200)
+            {
+                std::printf("CHANGE grain=%llu luma=%d->%d\n", static_cast<unsigned long long>(index), first, value);
+                std::fflush(stdout);
+                rc = 0;
+                break;
+            }
+            ++index;
+        }
+        if (rc != 0)
+        {
+            std::printf("RESULT none\n");
+        }
+        mxlReleaseFlowReader(instance, reader);
+        return rc;
     }
 
     int counter(mxlInstance instance, std::string const& flow, int width, int seconds)
@@ -307,9 +355,9 @@ int main(int argc, char** argv)
     auto const domain = arg(argc, argv, "--domain", "");
     int const width = std::stoi(arg(argc, argv, "--width", "1920"));
     int const seconds = std::stoi(arg(argc, argv, "--seconds", "20"));
-    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample"))
+    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample" && mode != "change"))
     {
-        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20]\n");
+        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample|change --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20]\n");
         return 2;
     }
     auto* instance = mxlCreateInstance(domain.c_str(), nullptr);
@@ -322,6 +370,10 @@ int main(int argc, char** argv)
     if (mode == "counter")
     {
         rc = counter(instance, arg(argc, argv, "--flow", ""), width, seconds);
+    }
+    else if (mode == "change")
+    {
+        rc = change(instance, arg(argc, argv, "--flow", ""), width, std::stoi(arg(argc, argv, "--x", "0")), std::stoi(arg(argc, argv, "--y", "0")), seconds);
     }
     else if (mode == "sample")
     {

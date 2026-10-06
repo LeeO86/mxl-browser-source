@@ -100,6 +100,11 @@ def main():
         ws_send(control, {"type": "key", "action": "down", "code": code, "key": ch})
         ws_send(control, {"type": "key", "action": "up", "code": code, "key": ch})
     ws_send(control, {"type": "text", "text": "ü你"})
+    # IME: a composition that is committed, then one that is cancelled.
+    ws_send(control, {"type": "ime", "action": "composition", "text": "にほ", "selection": [2, 2]})
+    ws_send(control, {"type": "ime", "action": "commit", "text": "日本"})
+    ws_send(control, {"type": "ime", "action": "composition", "text": "テ"})
+    ws_send(control, {"type": "ime", "action": "cancel"})
     ws_send(control, {"type": "wheel", "x": 0.5, "y": 0.5, "dx": 0, "dy": 120})
 
     reports = [m["data"] for m in ws_messages(events, 3) if m.get("type") == "event"]
@@ -109,9 +114,9 @@ def main():
     texts = [r["text"] for r in reports if "text" in r]
     wheels = [r for r in reports if "wheel" in r]
     assert clicked, "button click not reported"
-    assert texts and texts[-1] == "abü你", texts
+    assert texts and texts[-1] == "abü你日本", texts
     assert wheels and wheels[-1]["wheel"] == 1, f"wheel down not reported: {wheels}"
-    print(f"OK: click, keys, text (ab + ü你), wheel; {len(acks)} acks; within {time.time() - sent:.1f} s")
+    print(f"OK: click, keys, text (ab + ü你), IME (にほ → 日本 committed, テ cancelled), wheel; {len(acks)} acks; within {time.time() - sent:.1f} s")
 
 
 if __name__ == "__main__":
