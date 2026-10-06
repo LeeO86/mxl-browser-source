@@ -75,4 +75,4 @@ CMake ≥ 3.24 and Ninja. Without CEF and libmxl the core library and its unit t
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE). The image contains CEF (BSD-3-Clause) and Chromium with their own licences (`credits.html` of the CEF distribution).
+MIT, see [`LICENSE`](LICENSE). The image contains CEF (BSD-3-Clause), Chromium and other components with their own licences: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), in the image under `/usr/share/doc/mxl-browser-source/` (CEF's `LICENSE.txt` and Chromium's `CREDITS.html` in `cef/`).

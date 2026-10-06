@@ -117,6 +117,9 @@ COPY --from=build /src/build/grain_reader /usr/local/bin/mxl-bs-grain-reader
 COPY --from=build /opt/mxl/lib/ /usr/local/lib/
 COPY --from=build /tmp/mxl/build/vcpkg_installed/x64-linux/lib/ /usr/local/lib/
 COPY templates/ /usr/local/share/mxl-browser-source/templates/
+# Licences: CEF (BSD-3-Clause) and Chromium's third-party components (CREDITS.html), see THIRD_PARTY_NOTICES.md.
+COPY --from=cef /opt/cef/LICENSE.txt /opt/cef/CREDITS.html /usr/share/doc/mxl-browser-source/cef/
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/mxl-browser-source/
 # The NVIDIA container toolkit injects libEGL_nvidia but not the glvnd vendor file; without it
 # EGL falls back to llvmpipe (spike S1).
 RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
