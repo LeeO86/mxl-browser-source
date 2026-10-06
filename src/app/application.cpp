@@ -710,10 +710,11 @@ namespace mbs::app
         _browser->invalidate(); // spike S2: one paint of the loaded page even if it is static
         if (probeRenderer)
         {
-            // The renderer the page really gets (SPEC §5.5): WebGL's unmasked renderer string.
             std::lock_guard lock{_probeMutex};
-            _rendererProbeId = _browser->devToolsMethod("Runtime.evaluate",
-                R"js({"returnByValue":true,"expression":"(()=>{try{const g=document.createElement('canvas').getContext('webgl');if(!g)return 'none';const e=g.getExtension('WEBGL_debug_renderer_info');return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER));}catch(x){return 'error';}})()"})js");
+            if (_rendererProbeId == 0 && !_rendererReprobeAt)
+            {
+                sendRendererProbe();
+            }
         }
         broadcastEvent(R"({"type":"page","state":"loaded","url":)" + json(url) + R"(,"title":)" + json(title) + "}");
     }
@@ -867,6 +868,14 @@ namespace mbs::app
         broadcastEvent(R"({"type":"event","data":)" + data.serialize() + "}");
     }
 
+    void Application::sendRendererProbe()
+    {
+        // The renderer the page really gets (SPEC §5.5): WebGL's unmasked renderer string.
+        ++_rendererProbes;
+        _rendererProbeId = _browser->devToolsMethod("Runtime.evaluate",
+            R"js({"returnByValue":true,"expression":"(()=>{try{const g=document.createElement('canvas').getContext('webgl');if(!g)return 'none';const e=g.getExtension('WEBGL_debug_renderer_info');return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER));}catch(x){return 'error';}})()"})js");
+    }
+
     void Application::onDevToolsResult(int id, bool success, std::string const& text)
     {
         {
@@ -900,6 +909,18 @@ namespace mbs::app
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         bool const software = name == "none" || name == "error" || lowerName.find("swiftshader") != std::string::npos ||
                               lowerName.find("llvmpipe") != std::string::npos || lowerName.find("software") != std::string::npos;
+        if (software && _renderRequested == cef::RenderMode::Gpu)
+        {
+            // A WebGL context can fail while the GPU process is still starting (lab, once): ask again
+            // 5 s later before raising render_degraded. A real fallback answers the same three times.
+            std::lock_guard lock{_probeMutex};
+            if (_rendererProbes < 3)
+            {
+                _rendererReprobeAt = Clock::now() + std::chrono::seconds(5);
+                log::info("render_probe_retry", {{"renderer", name}, {"attempt", _rendererProbes}});
+                return;
+            }
+        }
         std::string const mode = software ? "software" : "gpu";
         {
             std::lock_guard lock{_pageMutex};
@@ -1098,6 +1119,11 @@ namespace mbs::app
                 bool hung = false;
                 {
                     std::lock_guard lock{_probeMutex};
+                    if (_rendererReprobeAt && now >= *_rendererReprobeAt && _rendererProbeId == 0)
+                    {
+                        _rendererReprobeAt.reset();
+                        sendRendererProbe();
+                    }
                     if (_probeId != 0 && now - _probeSent > std::chrono::milliseconds(_cfg.hangTimeoutMs))
                     {
                         hung = true;

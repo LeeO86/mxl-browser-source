@@ -292,9 +292,22 @@ namespace mbs::app
             m.setCounter("interaction_events_total", {{"type", key.substr(0, slash)}, {"result", key.substr(slash + 1)}}, static_cast<double>(count));
         }
         m.set("devtools_sessions", {}, _devtoolsSessions.load());
-        for (auto const& [name, enabled] : _doc->senders())
+        // Every sender of this configuration, enabled unless a stored IS-05 state says otherwise
+        // (the document only holds states that were changed).
+        auto const stored = _doc->senders();
+        std::vector<std::string> names{"video"};
+        if (_cfg.keyMode == config::KeyMode::FillKey)
         {
-            m.set("sender_enabled", {{"sender", name}}, enabled ? 1 : 0);
+            names.emplace_back("key");
+        }
+        if (_cfg.audioChannels > 0)
+        {
+            names.emplace_back("audio");
+        }
+        for (auto const& name : names)
+        {
+            auto const it = stored.find(name);
+            m.set("sender_enabled", {{"sender", name}}, it == stored.end() || it->second ? 1 : 0);
         }
         return m.render();
     }

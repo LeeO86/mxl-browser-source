@@ -119,6 +119,7 @@ namespace mbs::app
         void updateEngineState();
         void scheduleReload(std::chrono::milliseconds delay);
         void supervisorLoop();
+        void sendRendererProbe(); // caller holds _probeMutex
         void eventsLoop();
         void previewLoop();
         void readinessLoop();
@@ -187,6 +188,8 @@ namespace mbs::app
         int _probeId = 0;
         std::chrono::steady_clock::time_point _probeSent{};
         int _rendererProbeId = 0;
+        int _rendererProbes = 0;                                         // sent so far
+        std::optional<std::chrono::steady_clock::time_point> _rendererReprobeAt; // after a software answer
 
         // WebSockets.
         std::mutex _socketsMutex;
