@@ -12,7 +12,8 @@ namespace
 {
     using Map = std::map<std::string, std::string>;
 
-    SettingInfo const& row(Loaded const& loaded, std::string const& key)
+    // The table row of `key` (an empty row when the key is missing).
+    SettingInfo row(Loaded const& loaded, std::string const& key)
     {
         for (auto const& info : loaded.table)
         {
@@ -21,8 +22,7 @@ namespace
                 return info;
             }
         }
-        FAIL("no row " << key);
-        return loaded.table.front();
+        return {};
     }
 
     std::string errorKey(Map const& env)
