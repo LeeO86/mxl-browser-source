@@ -93,8 +93,8 @@ More decisions:
 - **Logs.** Chromium logs to stderr and to `log_file`; `log_file` is `/dev/null`, otherwise every line appears twice. Chromium's D-Bus errors at start (no bus in the container) are harmless.
 
 Next, in order:
-1. AMWA results in CI after the DNS-SD domain fix; integration tests in CI (`tests/integration/ci.sh`, including the G14 lifecycle) passed on the lab.
-2. The G1–G14 table, CHANGELOG and THIRD_PARTY_NOTICES, 1 h soak (repeat/skip pairs), release 1.0.0.
+1. Done in CI (run 37464513972): AMWA IS-04-01 (44 pass), IS-05-01, IS-05-02, BCP-007-03-01 all without failures (IS-04-01 needed `libnss-mdns` too: the node browsed the mock registry but could not resolve its `.local` name); `tests/integration/ci.sh` with the G14 lifecycle passes.
+2. 1 h soak (repeat/skip pairs), release 1.0.0.
 
 ## 4. Platform guideline G1–G14
 
