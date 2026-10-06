@@ -153,6 +153,12 @@ namespace mbs::nmos
             labelAndGroup(sender, s.senderLabel, role, "MXL sender");
             ::nmos::insert_resource(model.node_resources, std::move(sender));
             auto connection = ::nmos::make_connection_mxl_sender(us(senderId), us(s.domainId), us(flowId));
+            // make_connection_mxl_sender leaves "auto" in /active too; a Sender reports its real domain and
+            // flow from the start (BCP-007-03, AMWA IS-05-01 test_11_01). /staged keeps "auto".
+            web::json::value leg = web::json::value::object();
+            leg[U("mxl_domain_id")] = web::json::value::string(us(s.domainId));
+            leg[U("mxl_flow_id")] = web::json::value::string(us(flowId));
+            connection.data[U("active")][U("transport_params")] = web::json::value::array({leg});
             connection.data[U("active")][U("master_enable")] = web::json::value::boolean(enabled);
             connection.data[U("staged")][U("master_enable")] = web::json::value::boolean(enabled);
             ::nmos::insert_resource(model.connection_resources, std::move(connection));
@@ -283,7 +289,14 @@ namespace mbs::nmos
                 web::json::push_back(addresses, web::json::value::string(us(s.hostAddress)));
                 config[U("host_addresses")] = addresses;
                 config[U("href_mode")] = 2; // IP addresses, never names
-                if (!s.dnsSd)
+                if (s.dnsSd)
+                {
+                    // Multicast DNS-SD through Avahi works in "local." only. Unset, nmos-cpp takes the
+                    // interface's DNS domain (media.int in the lab), and Avahi fails every browse and
+                    // advertisement with -65537.
+                    config[U("domain")] = web::json::value::string(U("local."));
+                }
+                else
                 {
                     config[U("pri")] = std::numeric_limits<int>::max();
                     config[U("highest_pri")] = std::numeric_limits<int>::max();
