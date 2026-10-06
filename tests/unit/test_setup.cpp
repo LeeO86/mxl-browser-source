@@ -4,9 +4,11 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "mxlio/setup.hpp"
+#include "picojson/picojson.h"
 
 namespace fs = std::filesystem;
 using namespace mbs::mxlio;
@@ -23,6 +25,17 @@ TEST_CASE("the own domain must be on a tmpfs: the root or the domain directory")
 
     // A tmpfs root.
     CHECK(prepareDomain(shm.string(), (shm / "a").string(), id, "a", 200'000'000, true).created);
+    {
+        // BCP-007-03 schema: id, label, description and tags are required.
+        std::ifstream in(shm / "a" / "domain_def.json");
+        picojson::value v;
+        in >> v;
+        REQUIRE(v.is<picojson::object>());
+        CHECK(v.get("id").get<std::string>() == id);
+        CHECK(v.get("label").is<std::string>());
+        CHECK(v.get("description").is<std::string>());
+        CHECK(v.get("tags").is<picojson::object>());
+    }
 
     if (!isTmpfs(disk.string()))
     {
