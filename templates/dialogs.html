@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- Dialogs (SPEC §4.5, §17): alert, confirm and prompt at load; a click opens a file chooser
+     and arms a beforeunload prompt (Chromium asks only after a user gesture). Every return value
+     is reported through window.mxlBrowserSource.post. Nothing may wait for an operator. -->
+<html><head><meta charset="utf-8"><title>dialogs</title>
+<style>
+html,body{margin:0;height:100%;background:#302010;color:#fff;font:40px "DejaVu Sans",sans-serif;overflow:hidden}
+#all{position:absolute;inset:0;width:100%;height:100%;background:transparent;border:0;font:inherit;color:#fff}
+</style></head>
+<body>
+<button id="all">dialogs</button>
+<input id="file" type="file" style="display:none">
+<script>
+const post = (o) => { if (window.mxlBrowserSource) window.mxlBrowserSource.post(o); };
+addEventListener("load", () => {
+  alert("dialogs.html alert");
+  const confirmed = confirm("dialogs.html confirm");
+  const answer = prompt("dialogs.html prompt", "default");
+  post({dialogs: {confirm: confirmed, prompt: answer}});
+});
+addEventListener("beforeunload", (e) => { e.preventDefault(); e.returnValue = "dialogs.html beforeunload"; });
+document.getElementById("all").addEventListener("click", () => {
+  document.getElementById("file").click();
+  post({file_chooser: "opened"});
+});
+</script></body></html>

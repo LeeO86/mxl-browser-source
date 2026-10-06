@@ -38,7 +38,7 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_API_TOKEN` | – | optional bearer token for `/api/v1/…` and `/devtools/…` |
 | `BROWSER_DEVTOOLS` | `false` | Chrome DevTools through `/devtools/` (never the internal port) |
 
-The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`).
+The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
 Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL cannot start, 78 invalid configuration or MXL root not a tmpfs, 143 SIGTERM/SIGINT (also when the shutdown budget ran out).
 

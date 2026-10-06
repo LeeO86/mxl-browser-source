@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Permissions (SPEC §4.5, §17): a click requests camera and microphone, geolocation,
+     notifications, clipboard read and MIDI with SysEx. Each request reports how it ended through
+     window.mxlBrowserSource.post; none may be granted and none may wait for an operator. -->
+<html><head><meta charset="utf-8"><title>permissions</title>
+<style>
+html,body{margin:0;height:100%;background:#301020;color:#fff;font:40px "DejaVu Sans",sans-serif;overflow:hidden}
+#all{position:absolute;inset:0;width:100%;height:100%;background:transparent;border:0;font:inherit;color:#fff}
+</style></head>
+<body>
+<button id="all">permissions</button>
+<script>
+const post = (o) => { if (window.mxlBrowserSource) window.mxlBrowserSource.post(o); };
+const report = (name, promise) => promise.then(
+  (v) => post({permission: name, result: "granted", detail: String(v)}),
+  (e) => post({permission: name, result: "denied", detail: [e && e.name, e && e.code, e && e.message].filter((x) => x !== undefined && x !== "").join(" ") || String(e)}));
+document.getElementById("all").addEventListener("click", () => {
+  report("media", navigator.mediaDevices.getUserMedia({video: true, audio: true}));
+  report("geolocation", new Promise((ok, fail) => navigator.geolocation.getCurrentPosition(ok, fail, {timeout: 5000})));
+  report("notifications", Notification.requestPermission().then((r) => r === "granted" ? r : Promise.reject({name: r})));
+  report("clipboard", navigator.clipboard.readText());
+  report("midi", navigator.requestMIDIAccess({sysex: true}));
+});
+</script></body></html>

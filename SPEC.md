@@ -219,6 +219,8 @@ Calls before `OnLoadEnd` are queued and run after injection, in order (CasparCG 
 
 No dialog ever waits for an operator: the output MUST NOT stall on a modal.
 
+`permission_denied_total` counts only the requests Chromium passes to the handler. In CEF 144 geolocation, notifications, clipboard read and MIDI are already `denied` in the profile before any request, so Chromium refuses them itself and they are not counted. Camera and microphone reach the handler only when a capture device exists.
+
 ## 5. Video pipeline
 
 ### 5.1 Paint path
