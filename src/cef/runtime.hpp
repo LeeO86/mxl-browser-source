@@ -36,6 +36,7 @@ namespace mbs::cef
         std::string proxyBypass;          // --proxy-bypass-list
         int devtoolsPort = 0;             // 0: no remote debugging
         std::string devtoolsOrigin;       // --remote-allow-origins
+        bool webauthn = false;            // BROWSER_WEBAUTHN
         std::vector<std::string> extraFlags; // BROWSER_CHROMIUM_FLAGS_APPEND, appended
         std::string templatesDir;         // served at https://templates.local/
     };
@@ -94,6 +95,8 @@ namespace mbs::cef
         void invalidate();
         void navigate(std::string const& url);
         void reload(bool ignoreCache);
+        void goBack();
+        void goForward();
         void stopLoad();
         void executeJavaScript(std::string const& code);
         void setZoom(double factor);

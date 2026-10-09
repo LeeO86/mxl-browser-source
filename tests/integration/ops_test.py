@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Template calls, renderer crash, page hang and the DevTools tunnel (SPEC §17) against a running
-container. Kills the renderer with `docker exec <container> kill -9` (`DOCKER='sudo docker'` if
-needed). Standard library only.
+"""Template calls, back and forward, renderer crash, page hang and the DevTools tunnel (SPEC §17)
+against a running container. Kills the renderer with `docker exec <container> kill -9`
+(`DOCKER='sudo docker'` if needed). Standard library only.
 
     ops_test.py [host:port] [container] [devtools]
 
@@ -83,6 +83,27 @@ def templates():
     print(f"templates: update, play (page reported {played}), invoke, stop accepted")
 
 
+def wait_page(check, seconds=10):
+    """True when check(status page) holds within `seconds`."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if check(status()["page"]):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def history():
+    navigate("blank.html")
+    navigate("bars.html")
+    assert wait_page(lambda p: p["can_go_back"] and not p["can_go_forward"]), status()["page"]
+    assert call("POST", "/api/v1/source/back") == (202, {"queued": True})
+    assert wait_page(lambda p: p["url"].endswith("/blank.html") and p["state"] == "loaded" and p["can_go_forward"]), status()["page"]
+    call("POST", "/api/v1/source/forward")
+    assert wait_page(lambda p: p["url"].endswith("/bars.html") and p["state"] == "loaded" and not p["can_go_forward"]), status()["page"]
+    print("history: back to blank.html, forward to bars.html; can_go_back and can_go_forward follow")
+
+
 def crash():
     navigate("counter.html")
     before = status()["grains"]
@@ -134,6 +155,7 @@ def devtools():
 
 if __name__ == "__main__":
     templates()
+    history()
     crash()
     hang()
     if "devtools" in sys.argv[3:]:

@@ -42,7 +42,7 @@ curl -fs -o /dev/null http://127.0.0.1:8160/readyz || { echo "browser source not
 
 cd "$HERE"
 export DOCKER=docker
-python3 interact_test.py 127.0.0.1:8160
+python3 interact_test.py 127.0.0.1:8160 "$NAME" "$DOMAIN"
 python3 pages_test.py 127.0.0.1:8160 "$NAME"
 python3 ops_test.py 127.0.0.1:8160 "$NAME"
 python3 nmos_test.py 127.0.0.1:8160 "$NAME" "$DOMAIN" 3312

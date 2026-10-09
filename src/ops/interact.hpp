@@ -100,8 +100,14 @@ namespace mbs::ops
             int windowCount = 0;
         };
 
+        using Actions = std::vector<std::function<void()>>;
+
         void count(std::string const& type, std::string const& result);
         [[nodiscard]] std::string stateJson(int id) const;
+        /// Mouse-ups for the buttons the controller still holds (caller holds the lock).
+        void releaseButtons(Actions& actions);
+        /// Gives control to `id` (0: nobody); a change releases the held buttons.
+        void setController(int id, Actions& actions);
 
         InteractSettings _settings;
         PageInput& _page;
@@ -113,6 +119,9 @@ namespace mbs::ops
         std::map<int, Session> _sessions;
         int _nextId = 1;
         int _controller = 0; // session id, 0 = none
+        std::uint32_t _buttons = 0; // kLeftMouseButton… the controller holds (down without up)
+        int _lastX = 0;             // view position of the last pointer message
+        int _lastY = 0;
         Clock::time_point _lastInput{};
         InteractCounters _counters;
     };

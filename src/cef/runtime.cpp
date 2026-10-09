@@ -331,6 +331,12 @@ namespace mbs::cef
         {
             out.insert(out.end(), {"disable-gpu", "disable-gpu-compositing", "use-gl=disabled"});
         }
+        // Windowless CEF cannot show Chromium's WebAuthn dialog: without PublicKeyCredential,
+        // sign-in pages offer other methods instead of waiting for a passkey (SPEC §4.5).
+        if (!s.webauthn)
+        {
+            out.push_back("disable-blink-features=WebAuth");
+        }
         if (!s.proxyServer.empty())
         {
             out.push_back("proxy-server=" + s.proxyServer);
@@ -708,6 +714,13 @@ namespace mbs::cef
         }
 
         // --- load
+        void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool, bool canGoBack, bool canGoForward) override
+        {
+            if (auto impl = _impl.lock())
+            {
+                impl->observer.onHistory(canGoBack, canGoForward);
+            }
+        }
         void OnLoadStart(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, TransitionType) override
         {
             auto impl = _impl.lock();
@@ -1044,6 +1057,28 @@ namespace mbs::cef
             else
             {
                 impl->browser->Reload();
+            }
+        });
+    }
+
+    void Browser::goBack()
+    {
+        auto impl = _impl;
+        postToUi([impl] {
+            if (impl->browser)
+            {
+                impl->browser->GoBack();
+            }
+        });
+    }
+
+    void Browser::goForward()
+    {
+        auto impl = _impl;
+        postToUi([impl] {
+            if (impl->browser)
+            {
+                impl->browser->GoForward();
             }
         });
     }

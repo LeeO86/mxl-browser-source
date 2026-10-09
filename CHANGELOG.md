@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Interaction window: back, forward and reload buttons next to the Interact toggle (`POST /api/v1/source/back` and `/forward`; `can_go_back` and `can_go_forward` in the page state, from CEF's `OnLoadingStateChange`).
+- Text can be selected with the mouse. Moves while a button was down did not carry the button flag (`EVENTFLAG_LEFT_MOUSE_BUTTON`), and Chromium ends a drag at the first such move. The server now keeps the buttons that are down and puts them on every down, move and up; a click focuses the page first; a leave or the end of control releases a button still down. Double and triple click select a word and a line.
+- WebAuthn is hidden from pages by default (`BROWSER_WEBAUTHN=false`, new): windowless CEF cannot show Chromium's passkey or QR code dialog, so a sign-in page that offered a passkey (Microsoft Entra ID behind Zscaler) hung. Without `PublicKeyCredential` sign-in pages offer push, a code or a password (Entra's sign-in options no longer list the passkey).
+
 ## 1.0.1 - 2026-10-06
 
 - A new `domain_def.json` carries `description` and `tags`, as BCP-007-03 requires (`id`, `label`, `description`, `tags`). The browser source wrote only `id` and `label`, and mxl-st2110-gateway 1.0.2 skipped such domains. An existing file is still not rewritten.

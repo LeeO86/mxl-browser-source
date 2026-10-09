@@ -77,6 +77,13 @@ TEST_CASE("only routable IPv4 literals are announced (G5)")
     CHECK(load({{"NMOS_HOST_ADDRESS", "10.0.0.5"}}, {}, "host").config.nmosHostAddress == "10.0.0.5");
 }
 
+TEST_CASE("WebAuthn is hidden from pages unless enabled")
+{
+    CHECK_FALSE(load({}, {}, "host").config.webauthn);
+    CHECK(load({{"BROWSER_WEBAUTHN", "true"}}, {}, "host").config.webauthn);
+    CHECK(errorKey({{"BROWSER_WEBAUTHN", "maybe"}}) == "BROWSER_WEBAUTHN");
+}
+
 TEST_CASE("formats and secrets")
 {
     auto const f = parseFormat("1080p59.94");

@@ -27,7 +27,8 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 ```json
 {"type":"status","ready":true,"not_ready":"",
- "page":{"url":"https://templates.local/bars.html","title":"Bars","state":"loaded","loading":false,"error":"","loads":3},
+ "page":{"url":"https://templates.local/bars.html","title":"Bars","state":"loaded","loading":false,"error":"","loads":3,
+         "can_go_back":true,"can_go_forward":false},
  "render":{"mode":"gpu","renderer":"ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)","requested":"gpu","degraded":false,
            "format":"1080p50","width":1920,"height":1080},
  "grains":{"video":180000,"key":180000,"repeated":12,"missed":0,"late_paints":0,"begin_frames":180000},
@@ -56,6 +57,8 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 | POST | `/api/v1/source/navigate` | `{"url":"…"}` | navigate (URL policy applies; 403 when refused) |
 | POST | `/api/v1/source/reload` | `{"ignore_cache":false}` | reload |
 | POST | `/api/v1/source/stop` | – | stop loading |
+| POST | `/api/v1/source/back` | – | back in the page's history (202) |
+| POST | `/api/v1/source/forward` | – | forward in the page's history (202) |
 | POST | `/api/v1/source/clear-cache` | `{"cookies":false}` | clear the HTTP cache (and cookies) |
 | POST | `/api/v1/source/execute` | `{"js":"…"}` | run JavaScript in the main frame (202) |
 
@@ -139,7 +142,7 @@ Server → client:
 
 ```json
 {"type":"state","interact":{"enabled":true,"controller":"self","expires_in_s":118},
- "page":{"url":"…","title":"…","loading":false,"error":""},"render":{"mode":"gpu","format":"1080p50","width":1920,"height":1080}}
+ "page":{"url":"…","title":"…","loading":false,"error":"","can_go_back":false,"can_go_forward":false},"render":{"mode":"gpu","format":"1080p50","width":1920,"height":1080}}
 {"type":"ack","seq":18,"grain":123456789}
 {"type":"cursor","cursor":"pointer"}
 {"type":"dialog","kind":"confirm","message":"Sure?","result":"cancelled"}
@@ -147,7 +150,7 @@ Server → client:
 {"type":"error","code":"not_controller","message":"interaction is off for this session"}
 ```
 
-Binary frames: 8-byte little-endian grain index, then a JPEG (the preview). `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down).
+Binary frames: 8-byte little-endian grain index, then a JPEG (the preview). `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down). A `down` focuses the page; the buttons that are down ride on every `move` until their `up` (a drag selects text), and `leave` or the end of control sends the `up` of a button still down.
 
 ## DevTools (`BROWSER_DEVTOOLS=true` only)
 

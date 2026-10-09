@@ -766,6 +766,12 @@ namespace mbs::app
                 reply(res, 202, R"({"queued":true})");
                 return;
             }
+            if (action == "back" || action == "forward")
+            {
+                action == "back" ? _browser->goBack() : _browser->goForward();
+                reply(res, 202, R"({"queued":true})");
+                return;
+            }
             if (action == "stop")
             {
                 _browser->stopLoad();
