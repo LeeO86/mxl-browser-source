@@ -2,7 +2,8 @@
 // Live preview and the "Interact" mode (SPEC.md §7). Pictures come from the
 // /api/v1/interact WebSocket; while it is down, /api/v1/preview.jpg is polled
 // at 1 fps. While this session controls the page, pointer, wheel, keyboard,
-// text and IME input on the preview are forwarded to the page.
+// text and IME input on the preview are forwarded to the page. Back, forward
+// and reload act on the page's own history.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { api, live } from "../api.js";
 import { BUTTON_BITS, BUTTONS, InteractClient, modifiersOf, wheelPixels } from "../interact.js";
@@ -23,6 +24,7 @@ const keyboard = ref(false); // textarea focused
 const serverError = ref("");
 const hasFrame = ref(false);
 const renderSize = ref(null); // {width, height} from the state message
+const page = computed(() => live.page || {});
 
 const aspect = computed(() => {
   const f = renderSize.value || live.info?.format;
@@ -60,11 +62,20 @@ const client = new InteractClient({
     cursor.value = /^[a-z-]+$/.test(name || "") ? name : "default";
   },
   error(msg) {
-    serverError.value = `${msg.code}: ${msg.message}`;
-    clearTimeout(errorTimer);
-    errorTimer = setTimeout(() => (serverError.value = ""), 4000);
+    showError(`${msg.code}: ${msg.message}`);
   },
 });
+
+function showError(text) {
+  serverError.value = text;
+  clearTimeout(errorTimer);
+  errorTimer = setTimeout(() => (serverError.value = ""), 4000);
+}
+
+/** back, forward or reload (POST /api/v1/source/<action>). */
+function pageAction(action) {
+  api.post(`/api/v1/source/${action}`).catch((e) => showError(e.message));
+}
 
 function setInteract(enable, take = false) {
   interactOn.value = enable;
@@ -412,6 +423,11 @@ onUnmounted(() => {
 
 <template>
   <div class="preview-bar">
+    <button class="btn small secondary" type="button" title="Back" :disabled="!page.can_go_back"
+            @click="pageAction('back')">&larr; Back</button>
+    <button class="btn small secondary" type="button" title="Forward" :disabled="!page.can_go_forward"
+            @click="pageAction('forward')">Forward &rarr;</button>
+    <button class="btn small secondary" type="button" title="Reload" @click="pageAction('reload')">&#x21bb; Reload</button>
     <label class="inline">
       <input type="checkbox" :checked="interactOn" :disabled="!socketOpen"
              @change="setInteract($event.target.checked)" />

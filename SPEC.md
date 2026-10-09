@@ -185,7 +185,7 @@ Files under `BROWSER_TEMPLATES_DIR` (default `/config/templates`) are served to 
 - Load: `OnLoadStart`, `OnLoadEnd` (inject CSS, then JS, then queued template calls), `OnLoadError` (state `error`, reason, `page_loads_total{result}`).
 - While loading or in error, the output follows `BROWSER_ON_PAGE_ERROR`: `hold` (last frame, default), `transparent`, `black`, or `slate` (the built-in `error.html` with the reason).
 - Navigation policy (§14.3) is checked in `OnBeforeBrowse` and for sub-resources in `OnBeforeResourceLoad`.
-- Reload, stop, clear cache (`ExecuteDevToolsMethod("Network.clearBrowserCache")`, no open DevTools port needed) and clear cookies are API calls.
+- Reload, stop, back, forward (`GoBack`/`GoForward`; `OnLoadingStateChange` gives `can_go_back`/`can_go_forward` in the page state), clear cache (`ExecuteDevToolsMethod("Network.clearBrowserCache")`, no open DevTools port needed) and clear cookies are API calls.
 
 ### 4.4 Template control (CasparCG style)
 
@@ -214,10 +214,13 @@ Calls before `OnLoadEnd` are queued and run after injection, in order (CasparCG 
 | downloads (`CanDownload`) | denied | `downloads_blocked_total` |
 | camera, microphone, geolocation, notifications, clipboard read, MIDI (`OnRequestMediaAccessPermission`, `OnShowPermissionPrompt`) | denied | `permission_denied_total{type}` |
 | file chooser (`OnFileDialog`) | cancelled | event |
+| WebAuthn: passkeys, security keys, a phone by QR code | hidden (`BROWSER_WEBAUTHN=false`, default): no `PublicKeyCredential` | – |
 | context menu | empty model | – |
 | print | ignored | – |
 
 No dialog ever waits for an operator: the output MUST NOT stall on a modal.
+
+WebAuthn needs Chromium's own dialog (passkey picker, security key prompt, the QR code for a phone), which only the Chrome runtime shows, in a native window; windowless CEF (always Alloy style) cannot show it and the container has no authenticator. A request would wait until its timeout, and a sign-in page that offers a passkey (Microsoft Entra ID behind Zscaler) hangs. Hidden (`disable-blink-features=WebAuth`), sign-in pages that check for `PublicKeyCredential` offer their other methods: Authenticator push, a code, a password (Entra's "Sign-in options" then lack "Face, fingerprint, PIN or security key"). A page that calls `navigator.credentials` with `publicKey` without checking still waits until its own timeout. `BROWSER_WEBAUTHN=true` restores Chromium's default. A sign-in survives restarts only with `BROWSER_PROFILE=persistent`; a tenant that allows passkeys only cannot sign in here.
 
 `permission_denied_total` counts only the requests Chromium passes to the handler. In CEF 144 geolocation, notifications, clipboard read and MIDI are already `denied` in the profile before any request, so Chromium refuses them itself and they are not counted. Camera and microphone reach the handler only when a capture device exists.
 
@@ -288,6 +291,7 @@ The last converted grain buffers are kept. A repeat copies them into the new gra
 - Input from a session without control is rejected with an `error` message and counted.
 - Coordinates are normalised (0…1 of the preview image) and scaled to view pixels: x_view = x · width / device_scale_factor (the same for y). The preview has the raster's aspect ratio, so no letterbox math is needed.
 - Injection on the UI thread: `SendMouseMoveEvent`, `SendMouseClickEvent` (button, up/down, click count), `SendMouseWheelEvent` (pixel deltas), `SendKeyEvent`, `SetFocus`, `ImeSetComposition`, `ImeCommitText`, `ImeFinishComposingText`, `ImeCancelComposition`.
+- The mouse behaves like a real one: a button down focuses the page first (`SetFocus(true)`); the server keeps the buttons that are down, and every down, move and up carries them (`EVENTFLAG_LEFT_MOUSE_BUTTON` …), because Chromium ends a drag, such as a text selection, at the first move without them. `clicks` 2 and 3 select a word and a line. A `leave`, or the end of control (toggle off, take-over, disconnect, timeout), with a button still down sends its up first.
 - Keys follow obs-browser: a key press is `KEYEVENT_RAWKEYDOWN` (with `windows_key_code` from a table of DOM `code` → Windows virtual key, and modifiers), then `KEYEVENT_CHAR` with `character` when the key produces text and no Ctrl/Meta is held, then `KEYEVENT_KEYUP`. Shortcuts (Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+Z) are key events with modifiers; Chromium's editing commands handle them. Clipboard paste uses the container's clipboard, which is empty: text is sent with `text` messages instead. Text and IME commit become `CHAR` events or `ImeCommitText`.
 - The UI captures keyboard events while it controls the page and calls `preventDefault()`. Shortcuts the operator's own browser reserves (for example Ctrl+W) cannot be captured; the UI documents this.
 - `OnCursorChange` is forwarded so the preview shows the page's cursor.
@@ -341,7 +345,7 @@ Server → client:
 
 | `type` | Fields | When |
 | --- | --- | --- |
-| `state` | `interact` {`enabled`, `controller`: `self`/`other`/`none`, `expires_in_s`}, `page` {`url`, `title`, `loading`, `error`}, `render` {`mode`, `format`} | on connect and on change |
+| `state` | `interact` {`enabled`, `controller`: `self`/`other`/`none`, `expires_in_s`}, `page` {`url`, `title`, `loading`, `error`, `can_go_back`, `can_go_forward`}, `render` {`mode`, `format`} | on connect and on change |
 | `ack` | `seq`, `grain` (first grain index that can show the effect) | after each input with `seq`, for latency measurement |
 | `cursor` | `cursor` (CSS cursor name) | `OnCursorChange` |
 | `dialog` | `kind`, `message`, `result` | §4.5 |
@@ -425,7 +429,7 @@ The ports were reserved with the platform (`SPECIFICATION.md` §12.2: "browser-s
 
 ### 10.2 Pages
 
-- **Source:** large preview, Interact toggle with the on-air frame, URL field with go/reload/stop, clear cache, presets, background, zoom and device scale, CSS and JS editors, page state, console messages, dialog events.
+- **Source:** large preview with back, forward and reload, Interact toggle with the on-air frame, URL field with go/reload/stop, clear cache, presets, background, zoom and device scale, CSS and JS editors, page state, console messages, dialog events.
 - **Template:** play/stop/next/remove, an `update` data editor (JSON or text), invoke.
 - **Settings:** the settings table of §11 with "restart required" markers, export and import buttons.
 - **Status:** render mode, grains/repeats/late paints, paint latency, audio meters and drift, NMOS ids and sender states, DevTools switch (when allowed).
@@ -442,6 +446,7 @@ The UI MUST work inside an iframe (no `X-Frame-Options: DENY`): the platform's p
 | POST | `/api/v1/source/navigate` | `{"url": …}` |
 | POST | `/api/v1/source/reload` | `{"ignore_cache": false}` |
 | POST | `/api/v1/source/stop` | stop loading |
+| POST | `/api/v1/source/back`, `/api/v1/source/forward` | the page's history (`can_go_back`, `can_go_forward` in the page state) |
 | POST | `/api/v1/source/clear-cache` | HTTP cache; `{"cookies": true}` also clears cookies |
 | POST | `/api/v1/source/execute` | `{"js": …}` run JavaScript in the page (logged with the caller address) |
 | GET, POST, DELETE | `/api/v1/presets[/{name}]` | presets; `POST /api/v1/presets/{name}/apply` |
@@ -550,6 +555,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_DEVTOOLS_PORT` | 9222 | yes | internal DevTools port (loopback) |
 | `BROWSER_API_TOKEN` | empty | yes | optional bearer token (secret) |
 | `BROWSER_PROFILE` | `ephemeral` | yes | `ephemeral` (cache in `/tmp`, cleared at start) or `persistent` (`<state>/profile`, cookies and logins survive) |
+| `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5). A `disable-blink-features` in `BROWSER_CHROMIUM_FLAGS_APPEND` replaces the function's: add `WebAuth` to it |
 | `BROWSER_TEMPLATES_DIR` | `<state>/templates` | yes | §4.2 |
 | `BROWSER_FONTS_DIR` | `<state>/fonts` | yes | extra fonts, added to fontconfig at start |
 | `BROWSER_CA_DIR` | `/etc/mxl-browser-source/ca` | yes | PEM files imported into the NSS database at start |
@@ -736,7 +742,7 @@ Measured on the target GPUs (A4000, L4) and the lab A16, recorded in `docs/perfo
   - `slow.html`: blocks the main thread for 30 ms every second; repeats are counted, no grain is missed, the writer never stalls.
   - `avsync.html` (**A/V sync**): once per second a white flash and a 1 kHz tone burst start in the same rAF callback; the reader finds the flash grain and the tone onset in the audio flow; |offset| ≤ 2 frames in CI, ≤ 1 frame on hardware.
   - `tone.html`: a 1 kHz tone at −20 dBFS arrives on the configured channels; a silent page gives zeros at the same cadence.
-  - `interact.html`: a WebSocket client clicks a button, types text (incl. non-ASCII and an IME commit) and scrolls; the page's reaction appears in a grain within 150 ms (lab) and the `ack` grain index is not later than the first grain showing it.
+  - `interact.html`: a WebSocket client clicks a button, types text (incl. non-ASCII and an IME commit) and scrolls; the page's reaction appears in a grain within 150 ms (lab) and the `ack` grain index is not later than the first grain showing it. It drags across a line of text, copies it with Ctrl+C, then double- and triple-clicks: the page reports each selection, and the highlight appears in a grain.
   - `dialogs.html`, `popup.html`, `download.html`, `permissions.html`: nothing blocks; events and counters as in §4.5.
   - `hang.html` and `kill -9` of the renderer process (`docker exec`): output holds, recovery within `BROWSER_HANG_TIMEOUT_MS` + 5 s and within 5 s after a crash, the process stays up.
   - Template API with a CasparCG-style template (`play`, `update`, `next`, `stop`).

@@ -2,7 +2,9 @@
 <!-- Interaction (SPEC §17): a button (x 100–500, y 100–300 of 1920×1080) and a text field
      (x 100–900, y 400–480). Each click, each change of the text and each wheel step is reported
      through window.mxlBrowserSource.post and drawn, so it also shows in the grains. Each click also
-     toggles a square (x 1600–1800, y 100–300) between black and white: the latency test's marker. -->
+     toggles a square (x 1600–1800, y 100–300) between black and white: the latency test's marker.
+     A line of text (x 100–1700, y 640–700) to select with the mouse: the selection is reported at
+     each mouse-up and copy, and painted solid magenta (text included) so a grain shows it. -->
 <html><head><meta charset="utf-8"><title>interact</title>
 <style>
 html,body{margin:0;height:100%;background:#102030;color:#fff;font:40px "DejaVu Sans",sans-serif;overflow:hidden}
@@ -10,12 +12,15 @@ html,body{margin:0;height:100%;background:#102030;color:#fff;font:40px "DejaVu S
 #field{position:absolute;left:100px;top:400px;width:800px;height:80px;font:inherit}
 #log{position:absolute;left:100px;top:540px;font-size:32px}
 #marker{position:absolute;left:1600px;top:100px;width:200px;height:200px;background:#000}
+#text{position:absolute;left:100px;top:640px;width:1600px;margin:0;font-size:40px;line-height:60px;white-space:nowrap}
+#text::selection{background:#f0f;color:#f0f}
 </style></head>
 <body>
 <button id="button">Click</button>
 <input id="field" autocomplete="off">
 <div id="log">clicks 0</div>
 <div id="marker"></div>
+<p id="text">Selectable text for the drag test</p>
 <script>
 let clicks = 0, wheel = 0;
 const post = (o) => { if (window.mxlBrowserSource) window.mxlBrowserSource.post(o); };
@@ -28,4 +33,6 @@ document.getElementById("button").addEventListener("click", () => {
 });
 document.getElementById("field").addEventListener("input", (e) => { show(); post({text: e.target.value}); });
 addEventListener("wheel", (e) => { wheel += Math.sign(e.deltaY); show(); post({wheel: wheel}); });
+addEventListener("mouseup", () => post({selection: String(getSelection())}));
+addEventListener("copy", () => post({copied: String(getSelection())}));
 </script></body></html>

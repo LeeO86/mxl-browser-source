@@ -13,9 +13,9 @@ namespace
     struct FakePage : PageInput
     {
         std::vector<std::string> calls;
-        void mouseMove(int x, int y, std::uint32_t, bool leave) override
+        void mouseMove(int x, int y, std::uint32_t modifiers, bool leave) override
         {
-            calls.push_back((leave ? "leave " : "move ") + std::to_string(x) + "," + std::to_string(y));
+            calls.push_back((leave ? "leave " : "move ") + std::to_string(x) + "," + std::to_string(y) + " m" + std::to_string(modifiers));
         }
         void mouseClick(int x, int y, MouseButton button, bool up, int clicks, std::uint32_t modifiers) override
         {
@@ -109,11 +109,14 @@ TEST_CASE("pointer, wheel, keys, text and IME become page events; acks carry the
     int const id = hub.open(a.peer());
     hub.message(id, R"({"type":"interact","enable":true})");
     hub.message(id, R"({"type":"pointer","action":"down","x":0.5,"y":0.25,"button":"left","clicks":2,"modifiers":["shift"],"seq":7})");
-    REQUIRE(page.calls.size() == 1);
-    CHECK(page.calls[0] == "click 960,270 b0 down x2 m2");
+    REQUIRE(page.calls.size() == 2);
+    CHECK(page.calls[0] == "focus"); // a click focuses the page first
+    CHECK(page.calls[1] == "click 960,270 b0 down x2 m18"); // shift + the left button it holds
     CHECK(a.last() == R"({"type":"ack","seq":7,"grain":4242})");
+    hub.message(id, R"({"type":"pointer","action":"up","x":0.5,"y":0.25,"button":"left","clicks":2})");
+    CHECK(page.calls.back() == "click 960,270 b0 up x2 m0");
     hub.message(id, R"({"type":"pointer","action":"leave","x":0,"y":0})");
-    CHECK(page.calls.back() == "leave 0,0");
+    CHECK(page.calls.back() == "leave 0,0 m0");
     hub.message(id, R"({"type":"wheel","x":0.5,"y":0.5,"dx":0,"dy":-120})");
     CHECK(page.calls.back() == "wheel 0,-120");
     page.calls.clear();
@@ -132,7 +135,31 @@ TEST_CASE("pointer, wheel, keys, text and IME become page events; acks carry the
     CHECK(page.calls[0] == "ime 2 2-2");
     CHECK(page.calls[1] == "commit 2");
     CHECK(page.calls[2] == "focus");
-    CHECK(hub.counters().events.at("pointer/ok") == 2);
+    CHECK(hub.counters().events.at("pointer/ok") == 3);
+}
+
+TEST_CASE("a drag carries the held button on every move; a leave or the end of control releases it")
+{
+    FakePage page;
+    InteractHub hub(settings(), page);
+    Client a;
+    int const id = hub.open(a.peer());
+    hub.message(id, R"({"type":"interact","enable":true})");
+    hub.message(id, R"({"type":"pointer","action":"down","x":0.1,"y":0.5,"button":"left","clicks":1})");
+    hub.message(id, R"({"type":"pointer","action":"move","x":0.2,"y":0.5})");
+    hub.message(id, R"({"type":"pointer","action":"up","x":0.2,"y":0.5,"button":"left","clicks":1})");
+    hub.message(id, R"({"type":"pointer","action":"move","x":0.3,"y":0.5})");
+    CHECK(page.calls == std::vector<std::string>{"focus", "click 192,540 b0 down x1 m16", "move 384,540 m16", "click 384,540 b0 up x1 m0", "move 576,540 m0"});
+    page.calls.clear();
+    // A leave while the button is held (the UI's pointercancel) sends its up first.
+    hub.message(id, R"({"type":"pointer","action":"down","x":0.5,"y":0.5,"button":"left","clicks":3})");
+    hub.message(id, R"({"type":"pointer","action":"leave","x":0.5,"y":0.5})");
+    CHECK(page.calls == std::vector<std::string>{"focus", "click 960,540 b0 down x3 m16", "click 960,540 b0 up x1 m0", "leave 960,540 m0"});
+    page.calls.clear();
+    // So does the end of control (here the session closes) with a button down.
+    hub.message(id, R"({"type":"pointer","action":"down","x":0.5,"y":0.5,"button":"right"})");
+    hub.close(id);
+    CHECK(page.calls.back() == "click 960,540 b2 up x1 m0");
 }
 
 TEST_CASE("malformed messages are answered with an error and ignored")

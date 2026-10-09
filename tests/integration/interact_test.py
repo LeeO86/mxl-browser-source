@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Interaction test (SPEC §17): drives interact.html through /api/v1/interact and checks the
-page's reports on /api/v1/events. Standard library only.
+page's reports on /api/v1/events: clicks, keys, text, IME, wheel, then text selection (drag, Ctrl+C,
+double and triple click). With a container and its domain directory it also reads the selection
+highlight from the newest video grain (`docker exec … mxl-bs-grain-reader`, `DOCKER='sudo docker'`
+if needed). Standard library only.
 
-    interact_test.py [host:port]
+    interact_test.py [host:port] [container domain-dir]
 """
 import base64
 import json
 import os
+import re
 import socket
 import struct
+import subprocess
 import sys
 import time
 import urllib.request
@@ -73,9 +78,71 @@ def ws_messages(sock, seconds):
     return out
 
 
+def get_json(host, port, path):
+    with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=5) as response:
+        return json.loads(response.read())
+
+
+def grain_pixel(host, port, container, domain, x, y):
+    """Y, Cb, Cr (10 bit) of one pixel of the newest video grain."""
+    fmt = get_json(host, port, "/api/v1/info")["format"]
+    flow = get_json(host, port, "/api/v1/nmos")["senders"]["video"]["flow_id"]
+    out = subprocess.run([*os.environ.get("DOCKER", "docker").split(), "exec", container, "mxl-bs-grain-reader", "sample", "--domain", domain,
+                          "--flow", flow, "--width", str(fmt["width"]), "--height", str(fmt["height"]), "--x", str(x), "--y", str(y)],
+                         capture_output=True, text=True, check=True).stdout
+    return {k: int(v) for k, v in re.findall(r"\b(Y|Cb|Cr)=(\d+)", out)}
+
+
+def selection(host, port, control, events, grains):
+    """interact.html's text line (y 640–700): drag over it, copy it, then double and triple click.
+    `grains`: (container, domain) to check that the highlight (magenta) reaches the output."""
+    text = "Selectable text for the drag test"
+
+    def pointer(action, x, clicks=1):
+        ws_send(control, {"type": "pointer", "action": action, "x": x / 1920, "y": 670 / 1080, "button": "left", "clicks": clicks})
+
+    def reported(key):
+        return [d[key] for d in (m["data"] for m in ws_messages(events, 1.5) if m.get("type") == "event") if key in d]
+
+    def magenta():
+        time.sleep(0.5)  # the video delay
+        px = grain_pixel(host, port, *grains, 200, 670)
+        return px["Cb"] > 800 and px["Cr"] > 850, px
+
+    ws_send(control, {"type": "preview", "fps": 1})  # this socket is not read here
+    if grains:
+        painted, px = magenta()
+        assert not painted, f"highlight before any selection: {px}"
+    # Every move carries the held button, or Chromium ends the drag at the first move.
+    pointer("down", 100)
+    for x in range(200, 1700, 100):
+        ws_send(control, {"type": "pointer", "action": "move", "x": x / 1920, "y": 670 / 1080})
+    pointer("up", 1650)
+    dragged = reported("selection")
+    assert dragged and dragged[-1] == text, f"drag selected {dragged}"
+    if grains:
+        painted, px = magenta()
+        assert painted, f"selection not painted in the output: {px}"
+    for action in ("down", "up"):
+        ws_send(control, {"type": "key", "action": action, "code": "KeyC", "key": "c", "modifiers": ["ctrl"]})
+    copied = reported("copied")
+    assert copied and copied[-1] == text, f"Ctrl+C copied {copied}"
+    for clicks in (1, 2):
+        pointer("down", 150, clicks)
+        pointer("up", 150, clicks)
+    word = reported("selection")
+    assert word and word[-1].strip() == "Selectable", f"double click selected {word}"
+    pointer("down", 150, 3)
+    pointer("up", 150, 3)
+    line = reported("selection")
+    assert line and line[-1].strip() == text, f"triple click selected {line}"
+    print(f"OK: drag selected and Ctrl+C copied {text!r}{', highlight in the grain' if grains else ''}; double click {word[-1]!r}, triple click the line")
+
+
 def main():
     host, port = (sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8160").split(":")
     port = int(port)
+    grains = tuple(sys.argv[2:4]) if len(sys.argv) > 3 else None
     request = urllib.request.Request(f"http://{host}:{port}/api/v1/source/navigate", method="POST",
                                      data=json.dumps({"url": "https://templates.local/interact.html"}).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -121,6 +188,7 @@ def main():
     assert texts and texts[-1] == "abü你日本", texts
     assert wheels and wheels[-1]["wheel"] == 1, f"wheel down not reported: {wheels}"
     print(f"OK: click, keys, text (ab + ü你), IME (にほ → 日本 committed, テ cancelled), wheel; {len(acks)} acks; within {time.time() - sent:.1f} s")
+    selection(host, port, control, events, grains)
 
 
 if __name__ == "__main__":

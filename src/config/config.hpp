@@ -119,6 +119,7 @@ namespace mbs::config
         int devtoolsPort = 9222;
         std::string apiToken;
         bool persistentProfile = false;
+        bool webauthn = false;
         std::string templatesDir;
         std::string fontsDir;
         std::string caDir = "/etc/mxl-browser-source/ca";

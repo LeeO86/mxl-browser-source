@@ -78,6 +78,7 @@ namespace mbs::app
         void onLoadError(std::string const& url, int code, std::string const& text) override;
         void onTitle(std::string const& title) override;
         void onAddress(std::string const& url) override;
+        void onHistory(bool canGoBack, bool canGoForward) override;
         void onConsole(std::string const& level, std::string const& message, std::string const& source, int line) override;
         void onCursor(std::string const& cursor) override;
         void onDialog(std::string const& kind, std::string const& message, std::string const& result) override;
@@ -173,6 +174,8 @@ namespace mbs::app
         std::string _url;
         std::string _title;
         std::uint64_t _loads = 0;
+        bool _canGoBack = false;
+        bool _canGoForward = false;
         bool _slateShown = false;
         std::chrono::steady_clock::time_point _loadStarted{};
         std::deque<std::string> _templateQueue; // calls before OnLoadEnd

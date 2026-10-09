@@ -29,6 +29,8 @@ namespace mbs::cef
         virtual void onLoadError(std::string const& url, int code, std::string const& text) = 0;
         virtual void onTitle(std::string const& title) = 0;
         virtual void onAddress(std::string const& url) = 0;
+        /// Whether the main frame can go back or forward in its history (OnLoadingStateChange).
+        virtual void onHistory(bool canGoBack, bool canGoForward) = 0;
         /// `level`: debug, info, warning, error.
         virtual void onConsole(std::string const& level, std::string const& message, std::string const& source, int line) = 0;
         virtual void onCursor(std::string const& cursor) = 0;

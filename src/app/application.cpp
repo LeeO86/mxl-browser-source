@@ -447,6 +447,7 @@ namespace mbs::app
             rs.devtoolsPort = _cfg.devtoolsPort;
             rs.devtoolsOrigin = "http://127.0.0.1:" + std::to_string(_cfg.devtoolsPort); // the tunnel rewrites Origin to this
         }
+        rs.webauthn = _cfg.webauthn;
         rs.extraFlags = _cfg.chromiumFlagsAppend;
         rs.templatesDir = _cfg.templatesDir;
         std::string switches;
@@ -745,6 +746,20 @@ namespace mbs::app
         }
         std::lock_guard lock{_pageMutex};
         _url = url;
+    }
+
+    void Application::onHistory(bool canGoBack, bool canGoForward)
+    {
+        {
+            std::lock_guard lock{_pageMutex};
+            if (canGoBack == _canGoBack && canGoForward == _canGoForward)
+            {
+                return;
+            }
+            _canGoBack = canGoBack;
+            _canGoForward = canGoForward;
+        }
+        _interact->broadcastState();
     }
 
     void Application::onConsole(std::string const& level, std::string const& message, std::string const& source, int line)
@@ -1311,7 +1326,8 @@ namespace mbs::app
         std::lock_guard lock{_pageMutex};
         return R"({"url":)" + json(_url) + R"(,"title":)" + json(_title) + R"(,"state":")" + statusName(_page) + R"(","loading":)" +
                (_page == PageStatus::Loading ? "true" : "false") + R"(,"error":)" + json(_page == PageStatus::Error || _page == PageStatus::Crashed ? _pageReason : "") +
-               R"(,"loads":)" + std::to_string(_loads) + "}";
+               R"(,"loads":)" + std::to_string(_loads) + R"(,"can_go_back":)" + (_canGoBack ? "true" : "false") + R"(,"can_go_forward":)" +
+               (_canGoForward ? "true" : "false") + "}";
     }
 
     std::string Application::renderJson() const

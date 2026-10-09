@@ -77,6 +77,7 @@ namespace mbs::config
                 {"BROWSER_DEVTOOLS_PORT", "9222", true, false, "Internal DevTools port (loopback only)"},
                 {"BROWSER_API_TOKEN", "", true, true, "Optional bearer token for the API"},
                 {"BROWSER_PROFILE", "ephemeral", true, false, "ephemeral or persistent"},
+                {"BROWSER_WEBAUTHN", "false", true, false, "Offer WebAuthn (passkeys) to pages; off: sign-in pages fall back to other methods"},
                 {"BROWSER_TEMPLATES_DIR", "", true, false, "Local templates (default: <state>/templates)"},
                 {"BROWSER_FONTS_DIR", "", true, false, "Extra fonts (default: <state>/fonts)"},
                 {"BROWSER_CA_DIR", "/etc/mxl-browser-source/ca", true, false, "PEM files imported into the NSS database"},
@@ -432,6 +433,7 @@ namespace mbs::config
         c.devtoolsPort = parseInt("BROWSER_DEVTOOLS_PORT", get("BROWSER_DEVTOOLS_PORT"), 1, 65535);
         c.apiToken = get("BROWSER_API_TOKEN");
         c.persistentProfile = parseEnum<bool>("BROWSER_PROFILE", get("BROWSER_PROFILE"), {{"ephemeral", false}, {"persistent", true}});
+        c.webauthn = parseBool("BROWSER_WEBAUTHN", get("BROWSER_WEBAUTHN"));
         c.templatesDir = get("BROWSER_TEMPLATES_DIR").empty() ? c.stateDir + "/templates" : get("BROWSER_TEMPLATES_DIR");
         c.fontsDir = get("BROWSER_FONTS_DIR").empty() ? c.stateDir + "/fonts" : get("BROWSER_FONTS_DIR");
         c.caDir = get("BROWSER_CA_DIR");

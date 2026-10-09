@@ -128,6 +128,28 @@ namespace mbs::ops
         ++_counters.events[type + "/" + result];
     }
 
+    void InteractHub::releaseButtons(Actions& actions)
+    {
+        for (auto const& [bit, button] : {std::pair{kLeftMouseButton, MouseButton::Left}, std::pair{kMiddleMouseButton, MouseButton::Middle},
+                 std::pair{kRightMouseButton, MouseButton::Right}})
+        {
+            if ((_buttons & bit) != 0)
+            {
+                _buttons &= ~bit;
+                actions.emplace_back([this, x = _lastX, y = _lastY, b = button, held = _buttons] { _page.mouseClick(x, y, b, true, 1, held); });
+            }
+        }
+    }
+
+    void InteractHub::setController(int id, Actions& actions)
+    {
+        if (_controller != id)
+        {
+            releaseButtons(actions);
+            _controller = id;
+        }
+    }
+
     int InteractHub::open(Peer peer)
     {
         Outbox out;
@@ -146,15 +168,20 @@ namespace mbs::ops
 
     void InteractHub::close(int session)
     {
+        Actions actions;
         bool released = false;
         {
             std::lock_guard lock{_mutex};
             _sessions.erase(session);
             if (_controller == session)
             {
-                _controller = 0;
+                setController(0, actions);
                 released = true;
             }
+        }
+        for (auto const& action : actions)
+        {
+            action();
         }
         if (released)
         {
@@ -190,14 +217,19 @@ namespace mbs::ops
 
     void InteractHub::tick(Clock::time_point now)
     {
+        Actions actions;
         bool expired = false;
         {
             std::lock_guard lock{_mutex};
             if (_controller != 0 && now - _lastInput > std::chrono::seconds(_settings.timeoutS))
             {
-                _controller = 0;
+                setController(0, actions);
                 expired = true;
             }
+        }
+        for (auto const& action : actions)
+        {
+            action();
         }
         if (expired)
         {
@@ -237,7 +269,7 @@ namespace mbs::ops
     void InteractHub::message(int id, std::string const& raw, Clock::time_point now)
     {
         Outbox out;
-        std::vector<std::function<void()>> actions; // page input, run after the lock
+        Actions actions; // page input, run after the lock
         bool stateChanged = false;
         {
             std::lock_guard lock{_mutex};
@@ -295,7 +327,7 @@ namespace mbs::ops
                         {
                             if (_controller == 0 || _controller == id || flag(o, "take"))
                             {
-                                _controller = id;
+                                setController(id, actions);
                                 _lastInput = now;
                                 stateChanged = true;
                             }
@@ -306,7 +338,7 @@ namespace mbs::ops
                         }
                         else if (_controller == id)
                         {
-                            _controller = 0;
+                            setController(0, actions);
                             stateChanged = true;
                         }
                         else
@@ -342,15 +374,29 @@ namespace mbs::ops
                             std::string const b = text(o, "button");
                             MouseButton const button = b == "right" ? MouseButton::Right : b == "middle" ? MouseButton::Middle : MouseButton::Left;
                             int const clicks = std::clamp(static_cast<int>(number(o, "clicks", 1)), 1, 3);
-                            if (action == "move" || action == "leave")
+                            std::uint32_t const bit = button == MouseButton::Right ? kRightMouseButton : button == MouseButton::Middle ? kMiddleMouseButton : kLeftMouseButton;
+                            _lastX = x;
+                            _lastY = y;
+                            // Moves carry the held buttons, or Chromium ends a drag (text selection)
+                            // at the first move; a leave releases them first.
+                            if (action == "move")
                             {
-                                bool const leave = action == "leave";
-                                actions.emplace_back([this, x, y, mods, leave] { _page.mouseMove(x, y, mods, leave); });
+                                actions.emplace_back([this, x, y, held = mods | _buttons] { _page.mouseMove(x, y, held, false); });
+                            }
+                            else if (action == "leave")
+                            {
+                                releaseButtons(actions);
+                                actions.emplace_back([this, x, y, mods] { _page.mouseMove(x, y, mods, true); });
                             }
                             else if (action == "down" || action == "up")
                             {
                                 bool const up = action == "up";
-                                actions.emplace_back([this, x, y, button, up, clicks, mods] { _page.mouseClick(x, y, button, up, clicks, mods); });
+                                _buttons = up ? _buttons & ~bit : _buttons | bit;
+                                if (!up)
+                                {
+                                    actions.emplace_back([this] { _page.focus(true); }); // a click focuses the page
+                                }
+                                actions.emplace_back([this, x, y, button, up, clicks, held = mods | _buttons] { _page.mouseClick(x, y, button, up, clicks, held); });
                             }
                             else
                             {

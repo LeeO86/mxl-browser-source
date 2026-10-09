@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
 project(mxl-browser-source
-    VERSION 1.0.1
+    VERSION 1.1.0
     DESCRIPTION "MXL media function: a web page rendered offscreen with CEF"
     LANGUAGES CXX
 )

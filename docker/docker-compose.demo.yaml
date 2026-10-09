@@ -21,7 +21,7 @@ services:
       - ./registry.json:/home/registry.json:ro
 
   browser-source:
-    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.0.1}
+    image: ${MBS_IMAGE:-ghcr.io/leeo86/mxl-browser-source:1.1.0}
     network_mode: host
     user: "1000:1000"
     shm_size: 1gb
