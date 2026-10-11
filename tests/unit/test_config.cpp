@@ -91,3 +91,14 @@ TEST_CASE("formats and secrets")
     CHECK(f.rateDen == 1001);
     CHECK(row(load({{"BROWSER_API_TOKEN", "s3cret"}}, {}, "host"), "BROWSER_API_TOKEN").secret);
 }
+
+TEST_CASE("WIDGET_FRAME_ANCESTORS defaults to 'self' and must be one CSP source list")
+{
+    CHECK(load({}, {}, "host").config.widgetFrameAncestors == "'self'");
+    auto const set = load({{"WIDGET_FRAME_ANCESTORS", "'self' https://designer.example"}}, {}, "host");
+    CHECK(set.config.widgetFrameAncestors == "'self' https://designer.example");
+    CHECK(row(set, "WIDGET_FRAME_ANCESTORS").source == "env");
+    CHECK(row(set, "WIDGET_FRAME_ANCESTORS").restart);
+    CHECK(errorKey({{"WIDGET_FRAME_ANCESTORS", "'self'; script-src *"}}) == "WIDGET_FRAME_ANCESTORS");
+    CHECK(errorKey({{"WIDGET_FRAME_ANCESTORS", "https://a.example, https://b.example"}}) == "WIDGET_FRAME_ANCESTORS");
+}

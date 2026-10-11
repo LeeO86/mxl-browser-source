@@ -1223,8 +1223,8 @@ namespace mbs::app
             {
                 continue;
             }
-            _engine->requestPreview();
-            for (int i = 0; i < 10 && !_engine->preview(rgb, sequence); ++i)
+            auto const ticket = _engine->requestPreview();
+            for (int i = 0; i < 10 && !_engine->preview(ticket, rgb, sequence); ++i)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }

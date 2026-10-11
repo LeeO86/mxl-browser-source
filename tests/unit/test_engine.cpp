@@ -331,15 +331,31 @@ TEST_CASE("a preview is made on request from the newest paint")
     waitConverted(engine, 1);
     std::vector<std::uint8_t> rgb;
     std::uint64_t sequence = 0;
-    CHECK_FALSE(engine.preview(rgb, sequence));
-    engine.requestPreview();
-    for (int i = 0; i < 500 && !engine.preview(rgb, sequence); ++i)
+    CHECK_FALSE(engine.preview(1, rgb, sequence));
+    auto const first = engine.requestPreview();
+    for (int i = 0; i < 500 && !engine.preview(first, rgb, sequence); ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     CHECK(sequence == 1);
     REQUIRE(rgb.size() == 24 * 2 * 3);
     CHECK(rgb[0] == 255);
+
+    // A new paint, then a request: its first answer is that paint, not the preview made before
+    // it (1.1.0 answered /api/v1/preview.jpg with the previous request's picture).
+    auto const red = solid(0, 0, 255, 255);
+    engine.paint(red.data(), kWidth * 4, kWidth, kHeight);
+    waitConverted(engine, 2);
+    auto const second = engine.requestPreview();
+    CHECK(second == first + 1);
+    for (int i = 0; i < 500 && !engine.preview(second, rgb, sequence); ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(sequence == 2);
+    CHECK(rgb[0] == 255);
+    CHECK(rgb[1] == 0);
+    CHECK(rgb[2] == 0);
     clock.release();
     engine.stop();
 }

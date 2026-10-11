@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Template calls, back and forward, renderer crash, page hang and the DevTools tunnel (SPEC §17)
+"""Template calls, back and forward, renderer crash, page hang, the preview after a change, the
+widget routes and the DevTools tunnel (SPEC §17)
 against a running container. Kills the renderer with `docker exec <container> kill -9`
 (`DOCKER='sudo docker'` if needed). Standard library only.
 
@@ -13,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from interact_test import ws_connect, ws_messages, ws_send
@@ -139,6 +141,43 @@ def hang():
     print(f"hang: detected {hung:.1f} s after the load (3 s page delay + timeout), renderer killed, blank.html loaded {recovered:.1f} s later; missed +0")
 
 
+def preview():
+    """/api/v1/preview.jpg answers with the page as it is, not as it was at the request before
+    (1.1.0): after one change, two requests give the same picture, and not the one before."""
+    def jpeg():
+        with urllib.request.urlopen(BASE + "/api/v1/preview.jpg", timeout=10) as response:
+            return response.read()
+
+    navigate("blank.html")
+    call("POST", "/api/v1/source/execute", {"js": "document.body.style.background = 'rgb(0, 0, 200)'"})
+    time.sleep(0.5)
+    before = jpeg()
+    for colour in ("rgb(200, 0, 0)", "rgb(0, 200, 0)"):
+        call("POST", "/api/v1/source/execute", {"js": f"document.body.style.background = '{colour}'"})
+        time.sleep(0.5)
+        first, second = jpeg(), jpeg()
+        assert first == second, f"{colour}: the first preview after the change is an older picture"
+        assert first != before, f"{colour}: the preview still shows the picture before the change"
+        before = first
+    print("preview: after each change the first preview.jpg shows it (two requests, same picture)")
+
+
+def widgets():
+    with urllib.request.urlopen(BASE + "/widgets", timeout=10) as response:
+        assert json.loads(response.read())[0]["id"] == "interaction"
+        assert response.headers.get("Access-Control-Allow-Origin") is None
+    with urllib.request.urlopen(BASE + "/widget/interaction?theme=dark", timeout=10) as response:
+        assert response.headers.get("Content-Security-Policy") == "frame-ancestors 'self'", dict(response.headers)
+        assert response.headers.get("X-Frame-Options") is None
+    for method, path, code in (("POST", "/widgets", 405), ("GET", "/widget/interaction?theme=pink", 400), ("GET", "/widget/x", 404)):
+        try:
+            urllib.request.urlopen(urllib.request.Request(BASE + path, method=method), timeout=10)
+            raise AssertionError(f"{method} {path}: 200")
+        except urllib.error.HTTPError as e:
+            assert e.code == code, (method, path, e.code)
+    print("widgets: list, page with CSP frame-ancestors 'self', 405, 400 and 404")
+
+
 def devtools():
     pages = call("GET", "/devtools/json/list")[1]
     page = next(p for p in pages if p.get("type") == "page")
@@ -158,6 +197,8 @@ if __name__ == "__main__":
     history()
     crash()
     hang()
+    preview()
+    widgets()
     if "devtools" in sys.argv[3:]:
         devtools()
     print("OK")

@@ -202,10 +202,10 @@ namespace mbs::engine
         return (flow == Flow::Video ? _videoEnabled : flow == Flow::Key ? _keyEnabled : _audioEnabled).load();
     }
 
-    bool Engine::preview(std::vector<std::uint8_t>& rgb, std::uint64_t& sequence) const
+    bool Engine::preview(std::uint64_t ticket, std::vector<std::uint8_t>& rgb, std::uint64_t& sequence) const
     {
         std::lock_guard lock{_previewMutex};
-        if (_previewSequence == 0 || _previewSequence == sequence)
+        if (_previewSequence == 0 || _previewServed < ticket)
         {
             return false;
         }
@@ -214,17 +214,20 @@ namespace mbs::engine
         return true;
     }
 
-    void Engine::requestPreview()
+    std::uint64_t Engine::requestPreview()
     {
         if (_previewWidth == 0)
         {
-            return;
+            return 0;
         }
+        std::uint64_t ticket = 0;
         {
             std::lock_guard lock{_wakeMutex};
             _previewRequested = true;
+            ticket = ++_previewTicket;
         }
         _wake.notify_one();
+        return ticket;
     }
 
     std::uint64_t Engine::nextVisibleIndex() const
@@ -275,6 +278,7 @@ namespace mbs::engine
         while (true)
         {
             bool previewWanted = false;
+            std::uint64_t ticket = 0; // the newest preview request; the frame is taken after it
             {
                 std::unique_lock lock{_wakeMutex};
                 _wake.wait(lock, [this] { return _paintPending || _previewRequested || _stopping; });
@@ -284,6 +288,7 @@ namespace mbs::engine
                 }
                 _paintPending = false;
                 previewWanted = std::exchange(_previewRequested, false);
+                ticket = _previewTicket;
             }
             auto const frame = _store.take();
             if (frame.bgra != nullptr)
@@ -313,12 +318,12 @@ namespace mbs::engine
             }
             if (previewWanted && last != nullptr)
             {
-                makePreview(last);
+                makePreview(last, ticket);
             }
         }
     }
 
-    void Engine::makePreview(std::uint8_t const* bgra)
+    void Engine::makePreview(std::uint8_t const* bgra, std::uint64_t ticket)
     {
         convert::previewRgb(bgra, static_cast<std::size_t>(_settings.width) * 4, _settings.width, _settings.height, _previewWidth, _previewHeight,
             _previewScratch.data());
@@ -326,6 +331,7 @@ namespace mbs::engine
         _previewRgb.swap(_previewScratch);
         _previewScratch.resize(_previewRgb.size());
         ++_previewSequence;
+        _previewServed = ticket;
     }
 
     void Engine::tickLoop()

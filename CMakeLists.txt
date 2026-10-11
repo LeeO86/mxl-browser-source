@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
 project(mxl-browser-source
-    VERSION 1.1.0
+    VERSION 1.2.0
     DESCRIPTION "MXL media function: a web page rendered offscreen with CEF"
     LANGUAGES CXX
 )
@@ -44,6 +44,7 @@ add_library(mbs-core STATIC
     src/ops/interact.cpp
     src/ops/keymap.cpp
     src/ops/urlpolicy.cpp
+    src/ops/widgets.cpp
     src/util/logging.cpp
     src/util/metrics.cpp
     src/util/net.cpp
@@ -71,6 +72,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_setup.cpp
         tests/unit/test_tick.cpp
         tests/unit/test_urlpolicy.cpp
+        tests/unit/test_widgets.cpp
     )
     target_link_libraries(unit-tests PRIVATE mbs-core)
     add_test(NAME unit-tests COMMAND unit-tests)

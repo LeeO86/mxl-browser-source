@@ -359,7 +359,7 @@ Limits: 200 input messages per second per session, 64 KiB per message; beyond th
 
 The siblings preview with low-rate JPEG (multiviewer `/preview.jpg` at 5 fps and 480 px, test player thumbnail encoded on request). The browser source keeps that mechanism and adds a push path for interaction:
 
-- `GET /api/v1/preview.jpg`: the newest converted frame, encoded on request (cached for one preview period).
+- `GET /api/v1/preview.jpg`: the newest frame, converted after the request arrives (each request gets a ticket and is answered with a preview made for it or a later one; 1.1.0 answered with the previous request's picture), encoded once per preview.
 - Preview frames over the interaction WebSocket at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
 - The preview is made from the BGRA frame (downscaled box filter, composited over a checkerboard in the UI when transparent), so it costs nothing when no client watches.
 
@@ -462,6 +462,7 @@ The UI MUST work inside an iframe (no `X-Frame-Options: DENY`): the platform's p
 | GET | `/api/v1/events` | WebSocket: state, meters, dialogs, page events (4 Hz) |
 | GET | `/api/v1/interact` | WebSocket: §7.2 |
 | GET | `/devtools/…` | §10.4 |
+| GET | `/widgets`, `/widget/interaction` | §10.6 (outside `/api/v1`, no token) |
 
 With `BROWSER_API_TOKEN` set, every `/api/v1/…` and `/devtools/…` request needs `Authorization: Bearer <token>` (the UI asks once). Empty (default) means no token: on the platform the ingress has no authentication and the decision is the platform's (FlowXer runs without a token there, D-092).
 
@@ -477,6 +478,26 @@ With `BROWSER_API_TOKEN` set, every `/api/v1/…` and `/devtools/…` request ne
 - `/readyz`: 200 when the browser exists, the writers are open and, with a registry configured, the node is on the Query API. A page that fails to load does not make the function unready (the output holds); a CEF that cannot start does.
 - `/statusz`: human-readable summary.
 - `/metrics`: §12.
+
+### 10.6 Widgets (1.2.0, operator screens)
+
+The contract of mxl-webrtc-monitor 1.3.0, mxl-replay 1.4.0 and mxl-color-corrector 1.1.0.
+
+- `GET /widgets` answers `[{id, title, params, min_size: {w, h}, version}]` (`params` a JSON schema of the
+  query). It carries `Access-Control-Allow-Origin` for an `Origin` that `WIDGET_FRAME_ANCESTORS` lists (or
+  `*`), and `Vary: Origin`; GET only (405 otherwise). No token: it names no secret.
+- `interaction` (`min_size` 640×400, no parameter: one process is one browser source, §2.3): the Source
+  tab's interaction window: the preview, back, forward and reload, the Interact toggle with take-over and the
+  on-air frame, and with control the mouse, wheel, keys, text and IME of §7.1.
+- `GET /widget/interaction[?theme=dark|light|transparent]` is the UI page with only that widget, no app
+  chrome. It uses the instance's own origin only: REST, `/api/v1/events` and `/api/v1/interact` on
+  `WEB_PORT`. The page itself needs no token; with `BROWSER_API_TOKEN` set it asks for the token like the
+  app and keeps it for the browser tab. A bad `theme` answers 400, an unknown widget 404; other query
+  parameters are ignored. These routes carry `Content-Security-Policy: frame-ancestors
+  <WIDGET_FRAME_ANCESTORS>` and no `X-Frame-Options`.
+- The page posts `{type: "widget-ready"}` once it shows the preview, and `{type: "widget-size", w, h}` then
+  and on every resize, to `window.parent`.
+- No preview contract (`PREVIEW_*`): the preview is the JPEG push of §7.3, not WebRTC or HLS.
 
 ## 11. Configuration
 
@@ -516,6 +537,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | Key | Default | Restart | Meaning |
 | --- | --- | --- | --- |
 | `WEB_PORT` | 8160 | yes | web port |
+| `WIDGET_FRAME_ANCESTORS` | `'self'` | yes | CSP `frame-ancestors` of the widget pages (§10.6); `;`, `,` or control characters exit 78 |
 | `NMOS_PORT` | 3312 | yes | NMOS APIs; `NMOS_PORT`+1 reserved |
 | `NMOS_SEED` | hostname | yes | seed of all UUIDv5 ids |
 | `NMOS_LABEL` | `MXL Browser Source` | yes | node and device label |

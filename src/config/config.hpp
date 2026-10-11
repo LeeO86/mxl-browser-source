@@ -72,6 +72,7 @@ namespace mbs::config
     struct Config
     {
         int webPort = 8160;
+        std::string widgetFrameAncestors = "'self'"; // CSP frame-ancestors of /widget/*, CORS origins of /widgets
         int nmosPort = 3312;
         std::string nmosSeed;
         std::string nmosLabel = "MXL Browser Source";

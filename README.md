@@ -2,7 +2,7 @@
 
 Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writes it as MXL flows: video (v210, optionally with a key as v210a or a separate key flow) and audio (float32, 48 kHz). One BeginFrame per MXL grain index keeps the page frame-locked to house time (TAI). Senders register with NMOS (IS-04/IS-05, BCP-007-03) and are routed like every other media function of the MXL PoC platform. An operator sees a preview and can interact with the page from the web UI, like the "Interact" window of the OBS Browser Source; HTML graphics templates are driven CasparCG-style (`play`, `stop`, `next`, `update`).
 
-**Status: 1.1.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
+**Status: 1.2.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
 
 ## Run it
 
@@ -20,7 +20,7 @@ Open `http://<host>:8160/` for the UI. With an NVIDIA GPU add `--gpus 1` (the im
 
 | Port | Setting | Default |
 | --- | --- | --- |
-| Web UI, REST, WebSockets, `/livez`, `/readyz`, `/statusz`, `/metrics`, `/devtools/` | `WEB_PORT` | 8160 |
+| Web UI, REST, WebSockets, `/livez`, `/readyz`, `/statusz`, `/metrics`, `/devtools/`, widgets | `WEB_PORT` | 8160 |
 | NMOS Node and Connection APIs | `NMOS_PORT` | 3312 (+1 reserved) |
 
 The most used settings (all of them, with defaults and "restart required" markers, are in SPEC §11 and `GET /api/v1/config`):
@@ -36,6 +36,7 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `NMOS_REGISTRY_ADDRESS` / `_PORT` | – / 3210 | static registry; `/readyz` waits until the Query API lists the node |
 | `MXL_OUTPUT_DOMAIN_DIR` | `<root>/browser-source-<seed>` | the own domain (created once, never rewritten) |
 | `BROWSER_API_TOKEN` | – | optional bearer token for `/api/v1/…` and `/devtools/…` |
+| `WIDGET_FRAME_ANCESTORS` | `'self'` | CSP `frame-ancestors` of the `/widget` pages; `/widgets` answers these origins with CORS. `;`, `,` or control characters exit 78 |
 | `BROWSER_DEVTOOLS` | `false` | Chrome DevTools through `/devtools/` (never the internal port) |
 | `BROWSER_PROFILE` | `ephemeral` | `persistent` keeps cookies and logins in `/config/profile` across restarts |
 | `BROWSER_WEBAUTHN` | `false` | `true` offers WebAuthn (passkeys) to pages; see sign-in pages below |
@@ -43,6 +44,8 @@ The most used settings (all of them, with defaults and "restart required" marker
 The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
 The preview on the Source page is the interaction window: back, forward and reload, and with "Interact" on, mouse (drag to select text, double and triple click), keys, text and IME go to the page.
+
+Operator screens can frame the interaction window as a widget: `GET /widgets` lists it (`interaction`, no parameters, `min_size` 640×400) and `GET /widget/interaction[?theme=dark|light|transparent]` is the page. It talks only to this instance's own origin (REST and both WebSockets on `WEB_PORT`), asks for `BROWSER_API_TOKEN` when one is set, and posts `widget-ready` and `widget-size` to its parent. Only the pages that `WIDGET_FRAME_ANCESTORS` names may frame it; on the platform set it to `'self' https://designer.<fqdn>`.
 
 **Sign-in pages (Zscaler, Microsoft Entra ID).** Windowless CEF cannot show Chromium's WebAuthn dialog (passkeys, security keys, the QR code for a phone), so a page that asks for a passkey would hang. WebAuthn is therefore hidden from pages (`BROWSER_WEBAUTHN=false`), and Entra offers Authenticator push, a code or a password instead. Sign in once in the interaction window; with `BROWSER_PROFILE=persistent` the session survives restarts until the identity provider ends it. A tenant that allows passkeys only cannot sign in here: ask for another method, or for the graphics hosts to bypass the proxy sign-in.
 

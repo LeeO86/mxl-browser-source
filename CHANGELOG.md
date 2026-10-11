@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0
+
+- Operator-screen widget, as in mxl-webrtc-monitor 1.3.0, mxl-replay 1.4.0, mxl-color-corrector 1.1.0, mxl-srt-gateway 1.4.0 and mxl-test-player 1.2.0 (`SPEC.md` §10.6):
+  - `GET /widgets` lists one widget, `interaction` (`min_size` 640×400). It has no parameter: one process is one browser source. GET only (405 otherwise). It answers CORS only for an `Origin` that `WIDGET_FRAME_ANCESTORS` lists, with `Vary: Origin`.
+  - `GET /widget/interaction[?theme=dark|light|transparent]` is the Source tab's interaction window without the app around it: the page picture, back, forward, reload, and with Interact on, mouse, wheel, keys, text and IME to the page, with the on-air frame. Everything stays on the instance's own origin: REST, `/api/v1/events` and the `/api/v1/interact` WebSocket on `WEB_PORT`. With `BROWSER_API_TOKEN` set, the widget asks for the token like the app (kept for the browser tab). A bad theme answers 400, an unknown widget 404.
+  - New setting `WIDGET_FRAME_ANCESTORS` (default `'self'`, restart): the widget pages' `Content-Security-Policy: frame-ancestors`. They send no `X-Frame-Options`. `;`, `,` or control characters exit 78.
+  - The page posts `{type: "widget-ready"}` and `{type: "widget-size", w, h}` to the page that frames it.
+
+### Fixes
+
+- `GET /api/v1/preview.jpg` showed the picture one request behind. It asked the converter for a new preview but answered at once with the one an earlier request had made: after a change, the first poll still showed the page before it. Each preview request now gets a ticket and is answered only with a preview made for it or a later one. The WebSocket previews of the interaction window use the same tickets.
+- The Compose and Kubernetes examples use the `1.2.0` image.
+
 ## 1.1.0
 
 - Interaction window: back, forward and reload buttons next to the Interact toggle (`POST /api/v1/source/back` and `/forward`; `can_go_back` and `can_go_forward` in the page state, from CEF's `OnLoadingStateChange`).
