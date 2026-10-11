@@ -16,6 +16,7 @@
 #include "include/cef_version.h"
 #include "mxlio/setup.hpp"
 #include "nmos/node.hpp"
+#include "ops/widgets.hpp"
 #include "picojson/picojson.h"
 #include "util/logging.hpp"
 #include "util/net.hpp"
@@ -539,6 +540,12 @@ namespace mbs::app
             reply(res, 200, std::string(webui::IndexHtml()), "text/html; charset=utf-8");
             return;
         }
+        if (ops::isWidgetPath(path))
+        {
+            // The same page; main.js mounts the widget for /widget/ paths. No token: the page asks for it.
+            ops::widgetResponse(_cfg.widgetFrameAncestors, req, webui::IndexHtml(), res);
+            return;
+        }
         if (startsWith(path, "/devtools/"))
         {
             if (!_cfg.devtools)
@@ -649,10 +656,12 @@ namespace mbs::app
         }
         if (path == "/api/v1/preview.jpg" && method == "GET")
         {
+            // A preview made for this request: an older one shows the page as it was then (1.1.0
+            // answered with the previous request's picture).
             std::vector<std::uint8_t> rgb;
             std::uint64_t sequence = 0;
-            _engine->requestPreview();
-            for (int i = 0; i < 25 && !_engine->preview(rgb, sequence); ++i)
+            auto const ticket = _engine->requestPreview();
+            for (int i = 0; i < 25 && !_engine->preview(ticket, rgb, sequence); ++i)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(4));
             }

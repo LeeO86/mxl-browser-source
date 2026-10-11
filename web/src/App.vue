@@ -1,10 +1,11 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { api, auth, live, startEvents, submitToken } from "./api.js";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { api, live, startEvents } from "./api.js";
 import SourceTab from "./components/SourceTab.vue";
 import TemplateTab from "./components/TemplateTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
 import StatusTab from "./components/StatusTab.vue";
+import TokenDialog from "./components/TokenDialog.vue";
 
 const tabs = [
   { id: "source", label: "Source", component: SourceTab },
@@ -15,8 +16,6 @@ const tabs = [
 
 const currentTab = ref("source");
 const current = computed(() => tabs.find((t) => t.id === currentTab.value).component);
-const tokenInput = ref("");
-const tokenField = ref(null);
 const infoError = ref("");
 
 const page = computed(() => live.page || {});
@@ -36,17 +35,6 @@ function switchTab(id) {
 function onHashChange() {
   const id = location.hash.slice(1);
   if (tabs.some((t) => t.id === id)) currentTab.value = id;
-}
-
-watch(() => auth.asking, async (asking) => {
-  if (!asking) return;
-  await nextTick();
-  tokenField.value?.focus();
-});
-
-function sendToken(ok) {
-  submitToken(ok ? tokenInput.value : "");
-  tokenInput.value = "";
 }
 
 onMounted(async () => {
@@ -88,16 +76,5 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
     <component :is="current" />
   </main>
 
-  <div v-if="auth.asking" class="overlay">
-    <form class="panel tokenbox" @submit.prevent="sendToken(true)">
-      <h3>API token</h3>
-      <p class="note">This instance needs its API token (<code>BROWSER_API_TOKEN</code>). It is kept for this browser tab only.</p>
-      <label for="api-token">Token</label>
-      <input id="api-token" ref="tokenField" v-model="tokenInput" type="password" autocomplete="off" />
-      <div class="actions">
-        <button class="btn secondary" type="button" @click="sendToken(false)">Cancel</button>
-        <button class="btn" type="submit" :disabled="!tokenInput.trim()">OK</button>
-      </div>
-    </form>
-  </div>
+  <TokenDialog />
 </template>

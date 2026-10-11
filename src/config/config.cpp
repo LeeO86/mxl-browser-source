@@ -32,7 +32,8 @@ namespace mbs::config
         std::vector<Def> const& defs()
         {
             static std::vector<Def> const table = {
-                {"WEB_PORT", "8160", true, false, "Web port: UI, REST, WebSockets, health, metrics"},
+                {"WEB_PORT", "8160", true, false, "Web port: UI, REST, WebSockets, health, metrics, widgets"},
+                {"WIDGET_FRAME_ANCESTORS", "'self'", true, false, "Pages that may frame the widgets (CSP frame-ancestors); /widgets answers them with CORS"},
                 {"NMOS_PORT", "3312", true, false, "NMOS Node and Connection APIs; NMOS_PORT+1 is reserved"},
                 {"NMOS_SEED", "", true, false, "Seed of every UUIDv5 id (default: hostname)"},
                 {"NMOS_LABEL", "MXL Browser Source", true, false, "Node and device label"},
@@ -316,6 +317,15 @@ namespace mbs::config
         auto& c = out.config;
 
         c.webPort = parseInt("WEB_PORT", get("WEB_PORT"), 1, 65535);
+        c.widgetFrameAncestors = get("WIDGET_FRAME_ANCESTORS").empty() ? "'self'" : get("WIDGET_FRAME_ANCESTORS");
+        // One CSP directive's source list: a ';' or ',' would start another directive or policy.
+        for (unsigned char const ch : c.widgetFrameAncestors)
+        {
+            if (ch < 0x20 || ch == 0x7f || ch == ';' || ch == ',')
+            {
+                throw ConfigError("WIDGET_FRAME_ANCESTORS", "must be a CSP source list, e.g. 'self' https://designer.example");
+            }
+        }
         c.nmosPort = parseInt("NMOS_PORT", get("NMOS_PORT"), 1, 65534);
         if (c.nmosPort == c.webPort || c.nmosPort + 1 == c.webPort)
         {

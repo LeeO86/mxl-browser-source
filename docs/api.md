@@ -86,7 +86,15 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 ## Preview
 
-`GET /api/v1/preview.jpg` → `image/jpeg`, the newest frame at `BROWSER_PREVIEW_WIDTH`, composited over a mid-grey checkerboard where transparent.
+`GET /api/v1/preview.jpg` → `image/jpeg`, the newest frame at `BROWSER_PREVIEW_WIDTH`, composited over a mid-grey checkerboard where transparent. The preview is made after the request arrives (up to 100 ms); only when none comes in time is the last one sent (503 before the first paint).
+
+## Widgets
+
+No token (the page asks for it). SPEC §10.6.
+
+`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.2.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
+
+`GET /widget/interaction[?theme=dark|light|transparent]` → the UI page with only the interaction window, `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
 
 ## NMOS
 

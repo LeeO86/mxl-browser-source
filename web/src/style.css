@@ -14,6 +14,23 @@
   font-size: 15px;
   color-scheme: dark;
 }
+/* A widget's theme=light|transparent (data-theme); the app and theme=dark keep the dark look. A frame is
+   see-through only when its color scheme matches its parent's, so transparent leaves it at normal. */
+:root[data-theme="light"] {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --panel2: #eef1f5;
+  --border: #d4dbe3;
+  --text: #1b2430;
+  --muted: #5d6b7a;
+  --accent: #1f6fd1;
+  --ok: #1f8f47;
+  --warn: #a86d00;
+  --bad: #c23b2f;
+  --chip: #e6ebf1;
+  color-scheme: light;
+}
+:root[data-theme="transparent"] { --bg: transparent; color-scheme: normal; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 header { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem 1rem; padding: .7rem 1.2rem; background: var(--panel); border-bottom: 1px solid var(--border); }
@@ -119,6 +136,12 @@ code { background: var(--chip); padding: .05rem .3rem; border-radius: 4px; font-
 .stage-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: .85rem; pointer-events: none; }
 /* Receives keys, text and IME while it has the focus; sits at the last click. */
 textarea.ime-input { position: absolute; left: 0; top: 0; width: 2px; height: 1.2em; min-height: 0; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; pointer-events: none; caret-color: transparent; white-space: nowrap; }
+
+/* Widget (/widget/interaction): the preview fills the frame */
+.widget-root { position: relative; height: 100vh; display: flex; flex-direction: column; padding: .5rem; overflow: hidden; }
+.widget-root .preview-bar { margin-bottom: .4rem; }
+.widget-root > .empty { margin: auto; color: var(--muted); font-size: .85rem; }
+.stage.fill { flex: 1; min-height: 0; max-height: none; }
 
 /* Logs */
 .log { max-height: 260px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: .75rem; background: var(--panel2); border-radius: 5px; padding: .4rem .5rem; }

@@ -8,6 +8,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { api, live } from "../api.js";
 import { BUTTON_BITS, BUTTONS, InteractClient, modifiersOf, wheelPixels } from "../interact.js";
 
+// fill: the stage takes the height it is given (the widget) instead of the picture's aspect ratio;
+// the canvas letterboxes the picture either way.
+const props = defineProps({ fill: { type: Boolean, default: false } });
+
 const canvas = ref(null);
 const stage = ref(null);
 const input = ref(null); // hidden textarea that receives keys, text and IME
@@ -441,7 +445,7 @@ onUnmounted(() => {
     <span class="statusline" :class="{ err: serverError }">{{ serverError || statusLine }}</span>
   </div>
 
-  <div ref="stage" class="stage" :class="{ onair: controlling }" :style="{ aspectRatio: aspect }">
+  <div ref="stage" class="stage" :class="{ onair: controlling, fill: props.fill }" :style="props.fill ? null : { aspectRatio: aspect }">
     <canvas ref="canvas" role="img" aria-label="Page preview"
             :style="{ cursor: controlling ? cursor : 'default' }"
             @pointerdown="onButton($event, 'down')" @pointerup="onButton($event, 'up')"
@@ -456,7 +460,7 @@ onUnmounted(() => {
     <div v-if="!hasFrame" class="stage-empty">No preview yet</div>
   </div>
 
-  <p v-if="interactOn" class="note">
+  <p v-if="interactOn && !props.fill" class="note">
     Click the preview to send mouse and keys to the page; click outside it to release the keyboard.
     Shortcuts your own browser reserves (Ctrl+W, Ctrl+T, Ctrl+N, …) cannot be captured.
     Ctrl+V pastes your local clipboard as text.

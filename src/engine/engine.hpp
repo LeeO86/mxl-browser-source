@@ -133,11 +133,13 @@ namespace mbs::engine
         void setEnabled(Flow flow, bool enabled);
         [[nodiscard]] bool enabled(Flow flow) const;
 
-        /// The newest preview (RGB24, previewWidth() × previewHeight()); false when there is none
-        /// newer than `sequence`, which is updated otherwise.
-        bool preview(std::vector<std::uint8_t>& rgb, std::uint64_t& sequence) const;
         /// Asks the converter for a preview of the newest frame, also when the page does not paint.
-        void requestPreview();
+        /// Returns the request's ticket (0 when there is no preview).
+        std::uint64_t requestPreview();
+        /// The preview made for request `ticket` or a later one (RGB24, previewWidth() ×
+        /// previewHeight()); false while there is none. A preview made for an earlier request may
+        /// show an older frame. `sequence` is the preview's own number (for an encoding cache).
+        bool preview(std::uint64_t ticket, std::vector<std::uint8_t>& rgb, std::uint64_t& sequence) const;
         [[nodiscard]] std::uint32_t previewWidth() const { return _previewWidth; }
         [[nodiscard]] std::uint32_t previewHeight() const { return _previewHeight; }
 
@@ -161,7 +163,7 @@ namespace mbs::engine
         void tickLoop();
         GrainBuffers const& buffers(int id) const;
         int freeSetLocked() const;
-        void makePreview(std::uint8_t const* bgra);
+        void makePreview(std::uint8_t const* bgra, std::uint64_t ticket);
 
         EngineSettings _settings;
         Clock& _clock;
@@ -192,6 +194,7 @@ namespace mbs::engine
         std::condition_variable _wake;
         bool _paintPending = false;
         bool _previewRequested = false;
+        std::uint64_t _previewTicket = 0; // the newest request
         bool _stopping = false;
         std::atomic<bool> _stop{false};
 
@@ -213,6 +216,7 @@ namespace mbs::engine
         mutable std::mutex _previewMutex;
         std::vector<std::uint8_t> _previewRgb;
         std::uint64_t _previewSequence = 0;
+        std::uint64_t _previewServed = 0; // the request ticket the newest preview answered
         std::vector<std::uint8_t> _previewScratch;
 
         mutable std::mutex _statsMutex;
