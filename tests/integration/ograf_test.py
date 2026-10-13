@@ -75,7 +75,7 @@ def upload():
     assert code == 200, body
     code, body = request("POST", "/api/v1/ograf/graphics", raw=b"not a zip")
     assert code == 422, body
-    count = 1
+    count, ids = 1, {"mbs-probe"}
     if EXAMPLES:
         for name in sorted(os.listdir(EXAMPLES)):
             path = os.path.join(EXAMPLES, name)
@@ -83,8 +83,9 @@ def upload():
                 code, body = request("POST", "/api/v1/ograf/graphics", raw=zip_dir(path))
                 assert code == 200, (name, body)
                 count += len(body["graphics"])
-    listed = request("GET", "/ograf/v1/graphics")[1]["graphics"]
-    assert len(listed) == count, listed
+                ids |= {g["id"] for g in body["graphics"]}
+    listed = {g["id"] for g in request("GET", "/ograf/v1/graphics")[1]["graphics"]}
+    assert ids <= listed, (ids - listed, listed)  # the library may hold others (a lab run)
     print(f"upload: {count} graphics (probe + {count - 1} EBU examples), a broken ZIP refused with 422")
 
 
@@ -129,6 +130,7 @@ def eight_layers(events):
 
 def crash_restores(events, instances):
     before = layers()
+    probes(events, 1)  # drop the events from before the crash
     pids = renderer_pids()
     assert pids, "no renderer process"
     docker("kill", "-9", *pids)
