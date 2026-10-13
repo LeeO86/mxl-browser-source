@@ -45,6 +45,11 @@ export DOCKER=docker
 python3 interact_test.py 127.0.0.1:8160 "$NAME" "$DOMAIN"
 python3 pages_test.py 127.0.0.1:8160 "$NAME"
 python3 ops_test.py 127.0.0.1:8160 "$NAME"
+# OGraf with the EBU examples at a pinned commit (docs/ograf.md §12).
+OGRAF_REF=164fb10bb361e249bc0cd915b0af3d6ed70083d8
+OGRAF_SRC="$(mktemp -d)"
+curl -fsSL "https://codeload.github.com/ebu/ograf/tar.gz/$OGRAF_REF" | tar -xz -C "$OGRAF_SRC" --strip-components=1 "ograf-$OGRAF_REF/v1/examples"
+python3 ograf_test.py 127.0.0.1:8160 "$NAME" "$OGRAF_SRC/v1/examples"
 python3 nmos_test.py 127.0.0.1:8160 "$NAME" "$DOMAIN" 3312
 
 # G14 lifecycle. nmos_test.py restarted the container: wait until it is registered again.
