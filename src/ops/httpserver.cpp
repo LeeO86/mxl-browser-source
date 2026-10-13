@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -83,10 +84,13 @@ namespace mbs::ops
             case 405: return "Method Not Allowed";
             case 409: return "Conflict";
             case 413: return "Payload Too Large";
+            case 422: return "Unprocessable Content";
             case 429: return "Too Many Requests";
             case 500: return "Internal Server Error";
             case 502: return "Bad Gateway";
             case 503: return "Service Unavailable";
+            case 504: return "Gateway Timeout";
+            case 550: return "Graphic Error"; // OGraf Server API: the graphic's method threw
             default: return "Error";
             }
         }
@@ -247,6 +251,7 @@ namespace mbs::ops
         Handler handler;
         UpgradeHandler upgrade;
         RawHandler raw;
+        LargeBodies large;
         int listenFd = -1;
         int boundPort = 0;
         std::atomic<bool> stop{false};
@@ -296,6 +301,62 @@ namespace mbs::ops
                 return false;
             }
             data.append(buf, static_cast<std::size_t>(n));
+            return true;
+        }
+
+        // A large body (an upload) goes to a file in large.dir instead of memory; the file is
+        // removed after the handler answered.
+        bool readBodyToFile(int fd, HttpRequest& req, std::string& rest, std::size_t length)
+        {
+            if (length > large.maxBytes)
+            {
+                std::string const body = "{\"error\":\"body too large (at most " + std::to_string(large.maxBytes >> 20) + " MiB)\"}";
+                writeAll(fd, responseText(HttpResponse{413, "application/json", body, {}}));
+                return false;
+            }
+            std::string path = large.dir + "/upload-XXXXXX";
+            int const out = ::mkstemp(path.data());
+            if (out < 0)
+            {
+                writeAll(fd, responseText(HttpResponse{500, "application/json", R"({"error":"cannot store the body"})", {}}));
+                return false;
+            }
+            std::size_t written = 0;
+            bool ok = true;
+            auto const put = [&](std::string_view data) {
+                data = data.substr(0, length - written);
+                while (ok && !data.empty())
+                {
+                    ssize_t const n = ::write(out, data.data(), data.size());
+                    ok = n > 0;
+                    data.remove_prefix(ok ? static_cast<std::size_t>(n) : data.size());
+                    written += ok ? static_cast<std::size_t>(n) : 0;
+                }
+            };
+            put(rest);
+            rest.erase(0, std::min(rest.size(), length));
+            int idle = 0;
+            while (ok && written < length && !stop.load())
+            {
+                std::string chunk;
+                if (!readSome(fd, chunk, 500))
+                {
+                    if (++idle > 60) // 30 s without a byte
+                    {
+                        ok = false;
+                    }
+                    continue;
+                }
+                idle = 0;
+                put(chunk);
+            }
+            ::close(out);
+            if (!ok || written < length)
+            {
+                ::unlink(path.c_str());
+                return false;
+            }
+            req.bodyFile = path;
             return true;
         }
 
@@ -362,6 +423,10 @@ namespace mbs::ops
             if (auto const declared = req.header("Content-Length"); !declared.empty())
             {
                 length = static_cast<std::size_t>(std::strtoull(declared.c_str(), nullptr, 10));
+            }
+            if (large.match && large.match(req))
+            {
+                return readBodyToFile(fd, req, rest, length);
             }
             if (length > 4 * 1024 * 1024)
             {
@@ -581,6 +646,10 @@ namespace mbs::ops
             }
             serveHttp(fd, req);
             ::close(fd);
+            if (!req.bodyFile.empty())
+            {
+                ::unlink(req.bodyFile.c_str());
+            }
         }
 
         void acceptLoop()
@@ -714,6 +783,11 @@ namespace mbs::ops
         {
             _impl->shutdownAll();
         }
+    }
+
+    void HttpServer::streamLargeBodies(LargeBodies large)
+    {
+        _impl->large = std::move(large);
     }
 
     int HttpServer::port() const

@@ -120,6 +120,10 @@ COPY templates/ /usr/local/share/mxl-browser-source/templates/
 # Licences: CEF (BSD-3-Clause) and Chromium's third-party components (CREDITS.html), see THIRD_PARTY_NOTICES.md.
 COPY --from=cef /opt/cef/LICENSE.txt /opt/cef/CREDITS.html /usr/share/doc/mxl-browser-source/cef/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/mxl-browser-source/
+# Vendored for OGraf (docs/ograf.md): jsoncons (BSL-1.0), miniz (MIT), the EBU OGraf schemas (MIT).
+COPY third_party/jsoncons/LICENSE /usr/share/doc/mxl-browser-source/jsoncons/LICENSE
+COPY third_party/miniz/LICENSE /usr/share/doc/mxl-browser-source/miniz/LICENSE
+COPY third_party/ograf/LICENSE /usr/share/doc/mxl-browser-source/ograf-schemas/LICENSE
 # The NVIDIA container toolkit injects libEGL_nvidia but not the glvnd vendor file; without it
 # EGL falls back to llvmpipe (spike S1).
 RUN mkdir -p /usr/share/glvnd/egl_vendor.d \

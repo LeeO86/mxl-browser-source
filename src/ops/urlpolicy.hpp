@@ -28,12 +28,14 @@ namespace mbs::ops
         std::string registryHost;       // NMOS registry address
         std::string ownHost;            // NMOS_HOST_ADDRESS
         std::vector<int> ownPorts;      // WEB_PORT, NMOS_PORT, NMOS_PORT+1, the DevTools port
+        bool localOnly = false;               // OGraf mode: only templates.local, ograf.local and localExtra
+        std::vector<std::string> localExtra;  // BROWSER_OGRAF_NETWORK hosts (the other rules still apply)
     };
 
     struct UrlVerdict
     {
         bool allowed = true;
-        std::string reason; // navigation_blocked_total{reason}: scheme, link_local, loopback, kubernetes, registry, own_port, denied, not_allowed
+        std::string reason; // navigation_blocked_total{reason}: scheme, link_local, loopback, kubernetes, registry, own_port, denied, not_allowed, ograf_local
     };
 
     class UrlPolicy

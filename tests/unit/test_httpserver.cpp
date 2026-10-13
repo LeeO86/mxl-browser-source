@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <filesystem>
 #include <string>
 
 #include "ops/httpserver.hpp"
@@ -141,4 +142,37 @@ TEST_CASE("the start-up port check sees a busy port and a free one")
     CHECK(error.find("bind failed on port " + std::to_string(port)) != std::string::npos);
     a.stop();
     CHECK(mbs::util::portFree(port, error));
+}
+
+TEST_CASE("a large-body route streams its body to a file; other bodies stay limited to 4 MiB")
+{
+    auto const dir = std::filesystem::temp_directory_path() / "mbs-upload-test";
+    std::filesystem::create_directories(dir);
+    std::string seenFile;
+    std::uintmax_t seenSize = 0;
+    HttpServer server([&](HttpRequest const& req, HttpResponse& res) {
+        seenFile = req.bodyFile;
+        seenSize = req.bodyFile.empty() ? req.body.size() : std::filesystem::file_size(req.bodyFile);
+        res.body = "ok";
+    });
+    server.streamLargeBodies({[](HttpRequest const& req) { return req.path == "/upload"; }, 8u << 20, dir.string()});
+    std::string error;
+    REQUIRE(server.start(0, error));
+    auto const send = [&](std::string const& path, std::size_t size) {
+        int const fd = connectTo(server.port());
+        std::string const body(size, 'z');
+        writeAll(fd, "POST " + path + " HTTP/1.1\r\nHost: t\r\nContent-Length: " + std::to_string(size) + "\r\n\r\n");
+        writeAll(fd, body);
+        auto const reply = readUntil(fd, [](std::string const& d) { return d.find("\r\n\r\n") != std::string::npos; });
+        ::close(fd);
+        return reply;
+    };
+    CHECK(send("/upload", 6u << 20).find("HTTP/1.1 200") == 0);
+    CHECK(seenSize == (6u << 20));
+    CHECK_FALSE(seenFile.empty());
+    CHECK_FALSE(std::filesystem::exists(seenFile)); // removed after the answer
+    CHECK(send("/upload", 9u << 20).find("HTTP/1.1 413") == 0);
+    CHECK(send("/other", 6u << 20).find("HTTP/1.1 413") == 0);
+    server.stop();
+    std::filesystem::remove_all(dir);
 }

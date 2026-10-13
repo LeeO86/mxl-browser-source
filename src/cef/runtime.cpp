@@ -208,7 +208,6 @@ namespace mbs::cef
                     CefStreamReader::CreateForData(const_cast<char*>(kNotFound), sizeof(kNotFound) - 1));
             }
 
-        private:
             // A regular file under `root`; empty for anything outside it (.., symlinks out).
             static std::string resolve(std::string const& root, std::string const& path)
             {
@@ -231,9 +230,70 @@ namespace mbs::cef
                 return file.string();
             }
 
+        private:
             std::string _dir;
             std::string _fallback;
             IMPLEMENT_REFCOUNTING(TemplatesFactory);
+        };
+
+        // https://ograf.local/ (docs/ograf.md §3, §4): the built-in renderer pages under /renderer/
+        // and the library's packages under /packages/<uuid>/<path>. No network, no file://.
+        class OgrafFactory : public CefSchemeHandlerFactory
+        {
+        public:
+            OgrafFactory(std::string packagesDir, std::map<std::string, std::string> pages)
+                : _packagesDir(std::move(packagesDir))
+                , _pages(std::move(pages))
+            {
+            }
+
+            CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefString const&, CefRefPtr<CefRequest> request) override
+            {
+                CefURLParts parts;
+                std::string path = "/";
+                if (CefParseURL(request->GetURL(), parts))
+                {
+                    path = CefURIDecode(CefString(&parts.path), true, static_cast<cef_uri_unescape_rule_t>(UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS))
+                               .ToString();
+                }
+                CefResponse::HeaderMap headers;
+                headers.emplace("Cache-Control", "no-store");
+                headers.emplace("Access-Control-Allow-Origin", "*");
+                if (path == "/renderer/" || path == "/renderer")
+                {
+                    path = "/renderer/index.html";
+                }
+                if (auto const page = _pages.find(path); page != _pages.end())
+                {
+                    return new CefStreamResourceHandler(200, "OK", "text/html", headers,
+                        CefStreamReader::CreateForData(const_cast<char*>(page->second.data()), page->second.size()));
+                }
+                if (path.starts_with("/packages/"))
+                {
+                    if (auto const file = TemplatesFactory::resolve(_packagesDir, path.substr(10)); !file.empty())
+                    {
+                        auto const extension = fs::path(file).extension().string();
+                        std::string mime;
+                        if (extension == ".mjs" || extension == ".js")
+                        {
+                            mime = "text/javascript"; // module scripts need a JavaScript MIME type
+                        }
+                        else
+                        {
+                            mime = CefGetMimeType(extension.empty() ? "" : extension.substr(1)).ToString();
+                        }
+                        return new CefStreamResourceHandler(200, "OK", mime.empty() ? "application/octet-stream" : mime, headers, CefStreamReader::CreateForFile(file));
+                    }
+                }
+                static constexpr char kNotFound[] = "not found";
+                return new CefStreamResourceHandler(404, "Not Found", "text/plain", {},
+                    CefStreamReader::CreateForData(const_cast<char*>(kNotFound), sizeof(kNotFound) - 1));
+            }
+
+        private:
+            std::string _packagesDir;
+            std::map<std::string, std::string> _pages; // kept alive: the stream readers point into them
+            IMPLEMENT_REFCOUNTING(OgrafFactory);
         };
 
         class App : public CefApp, public CefBrowserProcessHandler, public CefRenderProcessHandler
@@ -265,6 +325,7 @@ namespace mbs::cef
             void OnContextInitialized() override
             {
                 CefRegisterSchemeHandlerFactory("https", "templates.local", new TemplatesFactory(gSettings.templatesDir, "/usr/local/share/mxl-browser-source/templates"));
+                CefRegisterSchemeHandlerFactory("https", "ograf.local", new OgrafFactory(gSettings.ografPackagesDir, gSettings.ografPages));
             }
 
             // Renderer process: the page API and the router's renderer side.

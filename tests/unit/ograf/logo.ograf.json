@@ -1,0 +1,54 @@
+{
+    "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+    "name": "Minimal Test Graphics",
+    "description": "This Graphic shows an OGraf logo",
+    "id": "minimal-logo",
+    "main": "graphic.mjs",
+    "supportsRealTime": true,
+    "supportsNonRealTime": false,
+    "actionDurations": [
+        {
+            "type": "playAction",
+            "duration": 1000
+        },
+        {
+            "type": "stopAction",
+            "duration": 1000
+        }
+    ],
+    "author": {
+        "name": "Markus Nygård, YLE"
+    },
+    "renderRequirements": [
+        {
+            "resolution": {
+                "width": {
+                    "min": 600,
+                    "max": 4000,
+                    "ideal": 1920
+                }
+            },
+            "frameRate": {
+                "min": 1,
+                "max": 240,
+                "ideal": 60
+            }
+        }
+    ],
+    "thumbnails": [
+        {
+            "file": "thumbnails/1280x720.png",
+            "resolution": {
+                "width": 1280,
+                "height": 720
+            }
+        },
+        {
+            "file": "thumbnails/1280x720-cropped.png",
+            "resolution": {
+                "width": 66,
+                "height": 66
+            }
+        }
+    ]
+}

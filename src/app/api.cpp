@@ -16,6 +16,7 @@
 #include "include/cef_version.h"
 #include "mxlio/setup.hpp"
 #include "nmos/node.hpp"
+#include "ograf/serverapi.hpp"
 #include "ops/widgets.hpp"
 #include "picojson/picojson.h"
 #include "util/logging.hpp"
@@ -374,6 +375,12 @@ namespace mbs::app
                     _eventSockets.insert(socket);
                 }
                 socket->sendText(statusJson());
+                picojson::array layers;
+                for (auto const& l : _ografLayers->snapshot())
+                {
+                    layers.push_back(ograf::layerJson(l));
+                }
+                socket->sendText(R"({"type":"ograf","layers":)" + picojson::value(layers).serialize() + "}");
             };
             h.close = [this](std::shared_ptr<ops::WebSocket> const& socket) {
                 std::lock_guard lock{_socketsMutex};
@@ -612,6 +619,17 @@ namespace mbs::app
             error(res, 404, "not found");
             return;
         }
+        // --- OGraf (docs/ograf.md §6, §7): the same token rule as /api/v1; a CORS preflight has no token.
+        if (ograf::isOgrafPath(path))
+        {
+            if (method != "OPTIONS" && !authorized(req))
+            {
+                error(res, 401, "token required");
+                return;
+            }
+            ograf::handleOgraf(*_ografApi, req, res);
+            return;
+        }
         if (!startsWith(path, "/api/v1/"))
         {
             error(res, 404, "not found");
@@ -708,14 +726,17 @@ namespace mbs::app
                 }
                 if (next.url != previous.url)
                 {
-                    if (auto const verdict = ops::UrlPolicy(ops::UrlPolicySettings{_cfg.urlAllow, _cfg.urlDeny, _cfg.nmosRegistryAddress, _hostAddress,
-                                                                {_cfg.webPort, _cfg.nmosPort, _cfg.nmosPort + 1, _cfg.devtoolsPort}})
-                                                  .check(next.url, true);
+                    if (auto const verdict = urlPolicy("page").check(next.url, true);
                         !verdict.allowed)
                     {
                         error(res, 403, "URL refused by the policy: " + verdict.reason);
                         return;
                     }
+                }
+                if (auto const why = modeChangeRefused(previous, next, req))
+                {
+                    error(res, 409, *why);
+                    return;
                 }
                 if (!_doc->setSource(next))
                 {
@@ -737,6 +758,11 @@ namespace mbs::app
                 return;
             }
             auto const action = path.substr(15);
+            if ((action == "navigate" || action == "back" || action == "forward") && _doc->source().mode == "ograf")
+            {
+                error(res, 409, action + " needs mode page (the source shows the OGraf renderer)");
+                return;
+            }
             if (action == "navigate")
             {
                 auto const it = body.find("url");
@@ -748,9 +774,7 @@ namespace mbs::app
                 auto const previous = _doc->source();
                 auto next = previous;
                 next.url = it->second.get<std::string>();
-                auto const verdict = ops::UrlPolicy(ops::UrlPolicySettings{_cfg.urlAllow, _cfg.urlDeny, _cfg.nmosRegistryAddress, _hostAddress,
-                                                        {_cfg.webPort, _cfg.nmosPort, _cfg.nmosPort + 1, _cfg.devtoolsPort}})
-                                         .check(next.url, true);
+                auto const verdict = urlPolicy("page").check(next.url, true);
                 if (!verdict.allowed)
                 {
                     _metrics.inc("navigation_blocked_total", {{"reason", verdict.reason}});
@@ -874,6 +898,11 @@ namespace mbs::app
                     if (p.name == name)
                     {
                         auto const previous = _doc->source();
+                        if (auto const why = modeChangeRefused(previous, p.source, req))
+                        {
+                            error(res, 409, *why);
+                            return;
+                        }
                         _doc->setSource(p.source);
                         applySource(previous, p.source, true);
                         reply(res, 200, sourceJson(p.source));
@@ -914,6 +943,11 @@ namespace mbs::app
         }
         if (startsWith(path, "/api/v1/template/") && method == "POST")
         {
+            if (_doc->source().mode == "ograf")
+            {
+                error(res, 409, "template API needs mode page");
+                return;
+            }
             object body;
             if (!bodyObject(req, res, body))
             {
@@ -1075,6 +1109,18 @@ namespace mbs::app
             }
             auto const before = _doc->settings();
             auto const previous = _doc->source();
+            if (doc.get("source").is<object>())
+            {
+                auto next = config::Source{};
+                if (!config::mergeSource(doc.get("source").get<object>(), next))
+                {
+                    if (auto const why = modeChangeRefused(previous, next, req))
+                    {
+                        error(res, 409, *why);
+                        return;
+                    }
+                }
+            }
             if (auto const why = _doc->importDocument(doc))
             {
                 error(res, 400, *why);
@@ -1092,7 +1138,7 @@ namespace mbs::app
                     restart.push_back(value(key));
                 }
             }
-            applySource(previous, _doc->source(), _doc->source().url != previous.url);
+            applySource(previous, _doc->source(), false);
             object out;
             out["restart_required"] = value(restart);
             reply(res, 200, value(out).serialize());

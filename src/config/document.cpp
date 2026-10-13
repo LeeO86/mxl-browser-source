@@ -116,6 +116,14 @@ namespace mbs::config
                 }
                 s.audio = v.get<bool>();
             }
+            else if (key == "mode")
+            {
+                if (!v.is<std::string>() || (v.get<std::string>() != "page" && v.get<std::string>() != "ograf"))
+                {
+                    return "mode must be 'page' or 'ograf'";
+                }
+                s.mode = v.get<std::string>();
+            }
             else if (key != "name")
             {
                 return "unknown source field '" + key + "'";
@@ -137,6 +145,7 @@ namespace mbs::config
         o["user_agent_suffix"] = picojson::value(s.userAgentSuffix);
         o["reload_interval_s"] = picojson::value(static_cast<double>(s.reloadIntervalS));
         o["audio"] = picojson::value(s.audio);
+        o["mode"] = picojson::value(s.mode);
         return picojson::value(o);
     }
 

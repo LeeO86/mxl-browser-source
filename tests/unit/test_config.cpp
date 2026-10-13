@@ -102,3 +102,17 @@ TEST_CASE("WIDGET_FRAME_ANCESTORS defaults to 'self' and must be one CSP source 
     CHECK(errorKey({{"WIDGET_FRAME_ANCESTORS", "'self'; script-src *"}}) == "WIDGET_FRAME_ANCESTORS");
     CHECK(errorKey({{"WIDGET_FRAME_ANCESTORS", "https://a.example, https://b.example"}}) == "WIDGET_FRAME_ANCESTORS");
 }
+
+TEST_CASE("OGraf settings: network modes and CORS origins")
+{
+    auto const load = [](std::map<std::string, std::string> env) { return mbs::config::load(env, {}, "host").config; };
+    auto const def = load({});
+    CHECK(def.ografDir == "/config/ograf");
+    CHECK_FALSE(def.ografNetworkAny);
+    CHECK(def.ografNetworkHosts.empty());
+    CHECK(load({{"BROWSER_OGRAF_NETWORK", "any"}}).ografNetworkAny);
+    CHECK(load({{"BROWSER_OGRAF_NETWORK", "data.example, *.scores.example"}}).ografNetworkHosts.size() == 2);
+    CHECK(load({{"BROWSER_OGRAF_CORS_ORIGINS", "https://a.example https://b.example"}}).ografCorsOrigins.size() == 2);
+    CHECK_THROWS_AS(load({{"BROWSER_OGRAF_CORS_ORIGINS", "*"}}), mbs::config::ConfigError);
+    CHECK_THROWS_AS(load({{"BROWSER_OGRAF_CORS_ORIGINS", "controller.example"}}), mbs::config::ConfigError);
+}

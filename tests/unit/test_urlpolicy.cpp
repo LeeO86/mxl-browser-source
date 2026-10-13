@@ -98,3 +98,19 @@ TEST_CASE("deny adds to the built-in list; allow restricts to known hosts")
     CHECK(reason(allow, "https://templates.local/blank.html") == "ok");
     CHECK(reason(allow, "http://10.43.0.10/") == "denied"); // deny wins
 }
+
+TEST_CASE("OGraf mode with BROWSER_OGRAF_NETWORK=local: the library only, plus listed hosts")
+{
+    UrlPolicySettings s;
+    s.localOnly = true;
+    s.localExtra = {"data.example"};
+    UrlPolicy const policy(s);
+    CHECK(policy.check("https://ograf.local/renderer/", true).allowed);
+    CHECK(policy.check("https://ograf.local/packages/x/graphic.mjs", false).allowed);
+    CHECK(policy.check("https://templates.local/blank.html", true).allowed);
+    CHECK(policy.check("https://data.example/scores.json", false).allowed);
+    CHECK(policy.check("https://fonts.googleapis.com/css", false).reason == "ograf_local");
+    CHECK(policy.check("about:blank", true).allowed); // empty layers
+    UrlPolicy const page(UrlPolicySettings{});
+    CHECK(page.check("https://fonts.googleapis.com/css", false).allowed);
+}
