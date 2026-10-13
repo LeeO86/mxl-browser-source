@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (1.3.0)
+
+- EBU OGraf v1 (`docs/ograf.md`, work in progress on `feat/ograf`):
+  - The source field `mode` (`page` | `ograf`). In `ograf` the browser shows a built-in renderer with 8 layers (one iframe each, 8 on top); the output is the same fill and key as before.
+  - A graphics library under `BROWSER_OGRAF_DIR`: `POST /api/v1/ograf/graphics` with a ZIP, checked against the embedded v1 schemas; a ZIP is accepted or refused as a whole, the same id replaces a graphic, a layer keeps the old version until it is cleared.
+  - The OGraf Server API at `/ograf/v1` and the layer states at `/api/v1/ograf/layers` and on `/api/v1/events`.
+  - Layers come back after a renderer crash (at their step, without animation) and after a restart (loaded, not played).
+  - In mode `ograf` requests outside the library are blocked (`BROWSER_OGRAF_NETWORK=local`), so graphics are proven to work offline.
+  - New settings `BROWSER_OGRAF_DIR`, `_UPLOAD_MAX_MB`, `_ACTION_TIMEOUT_MS`, `_NETWORK`, `_CORS_ORIGINS`; new metrics `ograf_*`.
+  - The CasparCG template API stays (mode `page`).
+
 ## 1.2.0
 
 - Operator-screen widget, as in mxl-webrtc-monitor 1.3.0, mxl-replay 1.4.0, mxl-color-corrector 1.1.0, mxl-srt-gateway 1.4.0 and mxl-test-player 1.2.0 (`SPEC.md` §10.6):

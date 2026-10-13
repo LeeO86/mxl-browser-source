@@ -1,6 +1,8 @@
 # OGraf in mxl-browser-source (design, M0)
 
-Status: design for review. Nothing here is built yet. Base: 1.2.0 (main `df529cf`). Target: 1.3.0.
+Status: design approved (M0 review, 2026-10-13); M1 implemented on `feat/ograf` (library, renderer,
+Server API, mode, restore). Base: 1.2.0 (main `df529cf`). Target: 1.3.0. The review's answers are folded in
+below; §14 lists them.
 
 This adds EBU OGraf v1 to the browser source. Today the function shows one web page. After this change it can
 also host up to 8 OGraf graphics on top of each other, with a graphics library, a controller tab, an `ograf`
@@ -39,10 +41,13 @@ The source document (SPEC §4.1) gets one new field:
   `device_scale_factor` should stay at 1, and the UI says so.
 - **Switching while on air:**
   - `page` → `ograf` replaces the page with the empty renderer at once.
-  - `ograf` → `page` disposes every layer first (`dispose()` on each graphic, up to 2 s), then navigates.
-  - The UI asks for a confirmation when a layer is not empty.
+  - `ograf` → `page` while a layer holds a graphic answers **409** unless the request has `?force=true`
+    (`PUT`/`PATCH /api/v1/source`, a preset, a config import). With `force`, every layer is disposed first
+    (`dispose()` on each graphic, up to 2 s), then the page is shown.
+  - The UI asks for a confirmation and then sends `force`.
 - The CasparCG template API (`/api/v1/template/*`) works in `page` mode only. In `ograf` mode it answers
-  `409 {"error":"template API needs mode page"}`. The OGraf APIs answer 409 the other way round. Nothing
+  `409 {"error":"template API needs mode page"}`, and so do `navigate`, `back` and `forward`. The OGraf
+  actions answer 409 the other way round (the library routes work in both modes). Nothing
   switches the mode on its own: an automation call must never replace what is on air.
 - Interaction (Interact window, mouse and keys into the page) works in both modes. In `ograf` mode clicks go to
   the graphics.
@@ -56,7 +61,7 @@ needs a page behind graphics, it uses two browser sources and a keyer, or a late
 One process stays one CEF browser and one page (SPEC §2.3). The renderer is a built-in page,
 `https://ograf.local/renderer/` (plain HTML + JS, no framework), embedded in the binary like the UI.
 
-**Layers are same-origin iframes, one per layer** (recommended, see question Q1):
+**Layers are same-origin iframes, one per layer** (review Q1):
 
 - The renderer page holds 8 full-raster `<iframe>`s, absolutely positioned, `z-index` = layer number. Layer 8
   is on top. Each iframe loads a tiny layer document (`/renderer/layer.html`), which imports the graphic's
@@ -79,7 +84,10 @@ One process stays one CEF browser and one page (SPEC §2.3). The renderer is a b
   sets `background: transparent` and `color-scheme: normal`, because a dark color scheme can give an iframe an
   opaque canvas. M1 tests this with the alpha ramps (`transparency.html` values through a layer).
 - Each layer's `<iframe>` gets `allow="autoplay"`, so graphic audio plays like page audio: Chromium mixes it
-  into the one audio flow.
+  into the one audio flow. Graphics usually make no sound; one that does is heard on the output.
+- **Fonts:** graphics bundle their own fonts (they are offline). Without one, text falls back to the image's
+  system fonts: DejaVu, Liberation 2 (metric-compatible Arial, Times, Courier), Noto, Noto CJK and Noto Color
+  Emoji; extra fonts go into `BROWSER_FONTS_DIR`.
 
 **Commands from the function into the page** use the DevTools method the function already uses for the
 renderer probe: `Runtime.evaluate` with `awaitPromise: true` and `returnByValue: true`, on the expression
@@ -116,13 +124,17 @@ page, and the output holds the last frame meanwhile. Then the function restores 
 2. for layers that were `on`, `playAction({goto: step, skipAnimation: true})`.
 
 A graphic with `stepCount` 0 (play once and out) is not replayed. Metric: `ograf_restores_total{result}`.
-After a process restart the layers start empty (see Q2).
+
+**After a process restart** (review Q2): each layer's graphic and merged data are saved
+(`<state>/ograf-layers.json`, written atomically on load, update and clear). After a start in mode `ograf` the
+layers come back **loaded but not played** (state `ready`, no step): nothing goes on air by itself, and the
+operator gets the setup back with one Play.
 
 **renderCharacteristics** passed to `load()`:
 
 - `resolution`: the format's width and height;
 - `frameRate`: 25, 29.97, 50 or 59.94;
-- `accessToPublicInternet`: false, unless `BROWSER_OGRAF_NETWORK=allow` (§5).
+- `accessToPublicInternet`: false, unless `BROWSER_OGRAF_NETWORK=any` (§5).
 
 ## 4. Library
 
@@ -155,7 +167,8 @@ After a process restart the layers start empty (see Q2).
   `422 {"error":"…","manifests":[{"path","errors":[…]}]}`.
 - **Refused when:**
   - no manifest found;
-  - a manifest that doesn't validate against the v1 schema;
+  - a manifest that doesn't validate against the v1 schema (an unknown field is only a warning: the EBU
+    `l3rd-name` example itself has thumbnail fields the schema does not list, and newer manifests add fields);
   - `supportsRealTime` is false;
   - `main` missing, or outside the package;
   - two manifests in the ZIP with the same `id`;
@@ -185,6 +198,8 @@ After a process restart the layers start empty (see Q2).
 
 - **Delete without `force`** unlists the graphic. Its files stay while a layer uses it (as the spec
   recommends), and the layer keeps running.
+- The graphics list carries `v_inUse: [{layer, current}]`; `current: false` means the layer still runs the
+  replaced version ("replaced, in use on layer n" in the UI).
 - **Delete with `force`** first clears the layers that use the graphic.
 - A graphic without thumbnails shows a placeholder. The function does not render thumbnails itself.
 
@@ -199,12 +214,13 @@ include it.
 ## 5. Offline and network
 
 - Graphics must not need the internet in production. So that a lab test proves this, the default in `ograf`
-  mode is `BROWSER_OGRAF_NETWORK=local`:
+  mode is `BROWSER_OGRAF_NETWORK=local` (`local`, `any`, or a comma list of extra hosts):
   - the renderer and the graphics may load only `https://ograf.local/…`;
   - every other request is refused and counted (`navigation_blocked_total{reason="ograf_local"}`), with a
     console message naming the graphic's layer.
-- `allow`: the normal URL policy (SPEC §14.3) applies, for graphics that fetch data from an internal server.
-  `accessToPublicInternet` is then reported as true only when a proxy is set.
+- A host list (`data.example, *.scores.example`) allows those hosts too, with the normal URL policy on top;
+  for graphics that fetch data from an internal server.
+- `any`: the normal URL policy (SPEC §14.3) applies; `accessToPublicInternet` is reported as true.
 - Several EBU examples call external services (bar-chart and headline read a Google Sheet). With `local` they
   show their built-in data. M1 documents which examples work offline.
 
@@ -238,8 +254,8 @@ examples. With `BROWSER_API_TOKEN` set it needs the bearer token, like `/api/v1`
 | `POST /renderers/{id}/customActions/{id}` | no custom actions | `customActions: []`; any id → 404 |
 | upload | – | not in the spec; our own route, §4 |
 
-- **CORS:** off by default. `BROWSER_OGRAF_CORS_ORIGINS` (empty, `*`, or a list of origins) adds the headers the
-  spec suggests. See Q4.
+- **CORS:** off by default. `BROWSER_OGRAF_CORS_ORIGINS` (a space or comma list of origins, never `*`) adds the
+  headers the spec suggests, for those origins only, as `WIDGET_FRAME_ANCESTORS` does for the widgets.
 - **Interop:** M3 runs SuperFlyTV's `ograf-server` default controller (its UI) against `/ograf/v1`, plus the
   EBU `renderer-test` graphic.
 
@@ -306,16 +322,16 @@ switch. It has:
 | Key | Default | Restart | Meaning |
 | --- | --- | --- | --- |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | yes | library |
-| `BROWSER_OGRAF_UPLOAD_MAX_MB` | 256 | no | largest ZIP |
-| `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | 10000 | no | wait for a graphic's promise; then 504 |
-| `BROWSER_OGRAF_NETWORK` | `local` | no | `local` or `allow` (§5) |
-| `BROWSER_OGRAF_CORS_ORIGINS` | empty | yes | CORS on `/ograf/v1` (§6) |
+| `BROWSER_OGRAF_UPLOAD_MAX_MB` | 256 | yes | largest ZIP (unpacked: 4×) |
+| `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | 10000 | yes | wait for a graphic's promise; then 504 |
+| `BROWSER_OGRAF_NETWORK` | `local` | yes | `local`, `any`, or a comma list of hosts (§5) |
+| `BROWSER_OGRAF_CORS_ORIGINS` | empty | yes | origins allowed to call `/ograf/v1` from a browser (§6); `*` exits 78 |
 
 Fixed, not settings: 8 layers, renderer id `main`, base path `/ograf/v1`. The mode is the source field `mode`.
 
 ## 11. Metrics
 
-Prefix `mxl_browser_source_`:
+Prefix `mxl_browser_source_` (so `mxl_browser_source_ograf_actions_total`, …):
 
 | Metric | Type | Labels |
 | --- | --- | --- |
@@ -367,19 +383,17 @@ The Grafana dashboard gets one row with these metrics.
 - **M4:** soak, `docs/performance.md` numbers, README, SPEC (new §4.6 and the tables), CHANGELOG, a platform
   note (new settings, ports unchanged, routes, the library volume), release 1.3.0 after review.
 
-## 14. Questions for the reviewer
+## 14. Review answers (2026-10-13)
 
-- **Q1** (main question): one iframe per layer (isolation of globals, CSS and fonts; a few MB per used layer)
-  instead of `<div>`s in one document as ograf-server does. Recommended: iframes.
-- **Q2:** after a **process restart**, layers start empty (only renderer crashes and reloads restore). The
-  alternative: persist the layer states and restore them too. That would bring graphics back on air after a
-  pod restart, which can surprise an operator. Recommended: start empty, show "restored: no" in the tab.
-- **Q3:** `BROWSER_OGRAF_NETWORK=local` by default (blocks everything outside the library in `ograf` mode).
-  Recommended: yes, so lab tests show offline problems.
-- **Q4:** CORS on `/ograf/v1` off by default; the platform sets the controller's origin when one is chosen.
-  Without a token on the platform ingress, `*` would let any web page in an operator's browser drive the
-  graphics.
-- **Q5:** layers numbered 1–8, 8 on top (CasparCG convention: a higher layer is in front).
-- **Q6:** an upload is atomic per ZIP, and the same id replaces the graphic.
-- **Q7:** two new build dependencies: miniz (MIT, vendored) and jsoncons (Boost licence, vcpkg).
-  `THIRD_PARTY_NOTICES.md` gets both.
+- **Q1:** one iframe per layer: yes.
+- **Q2:** after a process restart, layers come back loaded, not played (§3); a renderer crash or reload restores
+  the step too.
+- **Q3:** `local` by default, plus `any` and a host list (§5).
+- **Q4:** CORS off by default, per origin, never `*` (§6).
+- **Q5:** layers 1–8, 8 on top.
+- **Q6:** a ZIP is accepted or refused as a whole; the same id replaces; a layer keeps the old package until it
+  is cleared or reloaded, and the list says so (§4).
+- **Q7:** miniz and jsoncons, listed in `THIRD_PARTY_NOTICES.md` and in the image's `/usr/share/doc`.
+- Notes: the upload route alone streams large bodies; actions on different layers never wait for each other
+  (one HTTP thread per request, one DevTools call each); a mode change away from `ograf` needs `force` while
+  layers are loaded; metric names carry the repository prefix.
