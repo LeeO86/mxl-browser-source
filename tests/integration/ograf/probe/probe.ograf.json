@@ -11,7 +11,7 @@
     "type": "object",
     "properties": {
       "text": { "type": "string", "default": "probe" },
-      "color": { "type": "string", "gddType": "color-rrggbb", "default": "#ff0000" }
+      "color": { "type": "string", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$", "default": "#ff0000" }
     }
   },
   "customActions": [
