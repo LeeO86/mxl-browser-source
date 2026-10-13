@@ -3,12 +3,14 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, live, startEvents } from "./api.js";
 import SourceTab from "./components/SourceTab.vue";
 import TemplateTab from "./components/TemplateTab.vue";
+import GraphicsTab from "./components/GraphicsTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
 import StatusTab from "./components/StatusTab.vue";
 import TokenDialog from "./components/TokenDialog.vue";
 
 const tabs = [
   { id: "source", label: "Source", component: SourceTab },
+  { id: "graphics", label: "Graphics", component: GraphicsTab },
   { id: "template", label: "Template", component: TemplateTab },
   { id: "settings", label: "Settings", component: SettingsTab },
   { id: "status", label: "Status", component: StatusTab },

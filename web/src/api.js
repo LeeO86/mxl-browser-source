@@ -51,19 +51,20 @@ export function wsUrl(path) {
 
 // ---- REST ----------------------------------------------------------------
 
-async function request(path, { method = "GET", body, raw = false } = {}, retried = false) {
+async function request(path, { method = "GET", body, raw = false, file } = {}, retried = false) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (file !== undefined) headers["Content-Type"] = file.type || "application/zip";
   if (token) headers.Authorization = `Bearer ${token}`;
   const resp = await fetch(path, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: file !== undefined ? file : body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
   if (resp.status === 401 && !retried) {
     await askToken();
-    return request(path, { method, body, raw }, true);
+    return request(path, { method, body, raw, file }, true);
   }
   if (raw) {
     if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
@@ -77,8 +78,12 @@ async function request(path, { method = "GET", body, raw = false } = {}, retried
     data = text;
   }
   if (!resp.ok) {
-    const reason = data && typeof data === "object" ? data.error : String(data || "").slice(0, 200);
-    throw new Error(`${resp.status}: ${reason || resp.statusText}`);
+    // Our errors are {"error"}; the OGraf Server API's are RFC 7807 {"title","detail"}.
+    const reason = data && typeof data === "object" ? data.error || data.detail : String(data || "").slice(0, 200);
+    const err = new Error(`${resp.status}: ${reason || resp.statusText}`);
+    err.status = resp.status;
+    err.data = data;
+    throw err;
   }
   return data;
 }
@@ -89,6 +94,7 @@ export const api = {
   put: (path, body) => request(path, { method: "PUT", body }),
   patch: (path, body) => request(path, { method: "PATCH", body }),
   del: (path) => request(path, { method: "DELETE" }),
+  upload: (path, file) => request(path, { method: "POST", file }),
   blob: async (path) => (await request(path, { raw: true })).blob(),
 };
 
@@ -118,6 +124,7 @@ export const live = reactive({
   connected: false, // events socket open
   console: [], // {time, level, message, source, line}
   log: [], // dialogs and page events: {time, kind, text}
+  ograf: [], // the 8 OGraf layers ({"type":"ograf"}, docs/ograf.md §7)
 });
 
 function push(list, entry) {
@@ -144,6 +151,9 @@ function onEvent(msg) {
       break;
     case "event":
       push(live.log, { time: now(), kind: "event", text: JSON.stringify(msg.data) });
+      break;
+    case "ograf":
+      live.ograf = msg.layers || [];
       break;
   }
 }

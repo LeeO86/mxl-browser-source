@@ -47,7 +47,8 @@ TEST_CASE("widgets: the list with CORS for listed origins only")
     picojson::value doc;
     REQUIRE(picojson::parse(doc, list.body).empty());
     REQUIRE(doc.is<picojson::array>());
-    REQUIRE(doc.get<picojson::array>().size() == 1);
+    REQUIRE(doc.get<picojson::array>().size() == 2);
+    CHECK(doc.get<picojson::array>()[1].get("id").to_str() == "ograf");
     auto const& widget = doc.get<picojson::array>()[0];
     CHECK(widget.get("id").to_str() == "interaction");
     CHECK(widget.get("version").to_str() == MBS_VERSION);
@@ -73,6 +74,7 @@ TEST_CASE("widgets: the page carries CSP frame-ancestors and no X-Frame-Options"
     CHECK(header(page, "Content-Security-Policy") == "frame-ancestors 'self' https://designer.example");
     CHECK(header(page, "X-Frame-Options") == "(none)");
     CHECK(get("/widget/interaction").status == 200);
+    CHECK(get("/widget/ograf", "layers=1,2").status == 200);
     CHECK(get("/widget/interaction", "theme=light&source=any").status == 200); // other parameters are ignored
     CHECK(get("/widget/interaction", "theme=pink").status == 400);
     CHECK(get("/widget/interaction", "", "", "POST").status == 405);

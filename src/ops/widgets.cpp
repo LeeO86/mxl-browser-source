@@ -64,7 +64,10 @@ namespace mbs::ops
         {
             // One browser source per process: the widget needs no parameter, the instance is the source.
             res.body = std::string(R"([{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},)") +
-                       R"("min_size":{"w":640,"h":400},"version":")" + MBS_VERSION + R"("}])";
+                       R"("min_size":{"w":640,"h":400},"version":")" + MBS_VERSION + R"("},)" +
+                       R"({"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",)" +
+                       R"("description":"Comma list of the layers to show (1-8); all when empty"}}},"min_size":{"w":640,"h":480},"version":")" + MBS_VERSION +
+                       R"("}])";
             if (auto const origin = req.header("Origin"); listedOrigin(frameAncestors, origin))
             {
                 res.headers.emplace_back("Access-Control-Allow-Origin", origin);
@@ -72,7 +75,7 @@ namespace mbs::ops
             res.headers.emplace_back("Vary", "Origin");
             return;
         }
-        if (req.path != "/widget/interaction")
+        if (req.path != "/widget/interaction" && req.path != "/widget/ograf")
         {
             error(res, 404, "widget not found");
             return;
