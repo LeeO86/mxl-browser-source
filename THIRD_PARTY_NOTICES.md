@@ -19,4 +19,5 @@ copyright files of every Ubuntu package in `/usr/share/doc/<package>/copyright`.
 | miniz 3.1.2 (`third_party/miniz`) | unpacking OGraf ZIP uploads | MIT (`miniz/LICENSE`) |
 | EBU OGraf v1 JSON schemas (`third_party/ograf`, embedded in the binary) | OGraf manifest check | MIT (`ograf-schemas/LICENSE`) |
 | doctest (`third_party/doctest`, tests only, not in the image) | unit tests | MIT |
+| GSAP 3.12.5 core and CSSPlugin (`templates/frameloop/lib`, as shipped in the EBU OGraf examples) | the frame-loop test page and lab graphic only | GreenSock standard licence (https://gsap.com/standard-license), headers kept |
 | Fonts: DejaVu, Liberation 2, Noto, Noto CJK, Noto Color Emoji (Ubuntu packages) | page text | Bitstream Vera / DejaVu licence (DejaVu), SIL OFL 1.1 (the others) |
