@@ -374,7 +374,7 @@ namespace mbs::app
             // (2026-10-05, 1080p50): Chromium's audio path about 60 ms.
             constexpr double kChromiumAudioMs = 60.0;
             double const audioMs = _cfg.audioChannels > 0 ? _cfg.audioBufferMs + kChromiumAudioMs : 0.0;
-            double const videoMs = periodMs * (_cfg.frameLead + (_renderRequested == cef::RenderMode::Gpu ? 1 : 0));
+            double const videoMs = periodMs * (_cfg.frameLead + _cfg.framePipeline + (_renderRequested == cef::RenderMode::Gpu ? 1 : 0));
             es.videoDelayGrains = static_cast<std::uint32_t>(std::max(0L, std::lround((audioMs - videoMs) / periodMs)));
         }
         switch (_cfg.onPageError)
@@ -385,6 +385,9 @@ namespace mbs::app
         default: es.onPageError = engine::Substitute::Hold; break;
         }
         es.previewWidth = static_cast<std::uint32_t>(_cfg.previewWidth);
+        es.realtime = _cfg.realtime;
+        es.pipelineGrains = static_cast<std::uint32_t>(_cfg.framePipeline);
+        es.convertThreads = static_cast<unsigned>(_cfg.convertThreads);
         _engine = std::make_unique<engine::Engine>(es, *_clock, *_outputs, _metrics);
         _engine->setAvOffsetMs(_cfg.avOffsetMs);
         for (auto const& [name, enabled] : _doc->senders())
@@ -470,6 +473,7 @@ namespace mbs::app
             rs.devtoolsOrigin = "http://127.0.0.1:" + std::to_string(_cfg.devtoolsPort); // the tunnel rewrites Origin to this
         }
         rs.webauthn = _cfg.webauthn;
+        rs.webgpu = _cfg.webgpu;
         rs.extraFlags = _cfg.chromiumFlagsAppend;
         rs.templatesDir = _cfg.templatesDir;
         rs.ografPackagesDir = _ografLibrary->packagesDir();
@@ -514,7 +518,7 @@ namespace mbs::app
             if (_browserReady.load())
             {
                 _engine->beginFrameSent();
-                _browser->beginFrame();
+                _browser->beginFrame([this] { _engine->beginFrameDispatched(); });
             }
         });
         _engine->setAudioActive(false);

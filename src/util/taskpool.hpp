@@ -2,6 +2,9 @@
 // From mxl-multiviewer (src/util/taskpool.hpp, MIT, same author).
 #pragma once
 
+#include <pthread.h>
+#include <sched.h>
+
 #include <algorithm>
 #include <condition_variable>
 #include <cstddef>
@@ -18,12 +21,22 @@ namespace mbs::util
 class TaskPool
 {
 public:
-    explicit TaskPool(unsigned threads)
+    // `fifoPriority` > 0: the workers try SCHED_FIFO at that priority (needs CAP_SYS_NICE; without
+    // it they stay at normal priority).
+    explicit TaskPool(unsigned threads, int fifoPriority = 0)
     {
         threads = std::max(1u, threads);
         for (unsigned i = 0; i < threads; ++i)
         {
-            workers_.emplace_back([this] { loop(); });
+            workers_.emplace_back([this, fifoPriority] {
+                if (fifoPriority > 0)
+                {
+                    sched_param param{};
+                    param.sched_priority = fifoPriority;
+                    pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+                }
+                loop();
+            });
         }
     }
 

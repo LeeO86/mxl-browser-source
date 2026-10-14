@@ -51,6 +51,6 @@ namespace mbs::util
         mutable std::mutex _mutex;
         std::map<std::string, Series> _series;
         std::map<std::string, Histogram> _histograms;
-        std::vector<double> _bounds{0.001, 0.002, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.1, 0.25, 1.0};
+        std::vector<double> _bounds{0.0005, 0.001, 0.002, 0.003, 0.005, 0.01, 0.0125, 0.015, 0.0175, 0.02, 0.025, 0.03, 0.04, 0.06, 0.1, 0.25, 1.0};
     };
 }

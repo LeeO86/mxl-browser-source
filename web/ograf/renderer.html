@@ -18,14 +18,18 @@
   const LAYERS = 8;
   const DISPOSE_MS = 2000;
   const layers = [];
-  for (let n = 1; n <= LAYERS; n++) {
+  function newFrame(n) {
     const frame = document.createElement('iframe');
     frame.style.zIndex = String(n);
     frame.setAttribute('allow', 'autoplay');
     frame.setAttribute('aria-label', 'Layer ' + n);
     frame.src = 'about:blank';
+    return frame;
+  }
+  for (let n = 1; n <= LAYERS; n++) {
+    const frame = newFrame(n);
     document.body.appendChild(frame);
-    layers[n] = { frame, ready: null, generation: 0 };
+    layers[n] = { n, frame, ready: null, generation: 0 };
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,9 +68,13 @@
     }
     layer.ready = null;
     layer.generation++;
-    layer.frame.onload = null;
-    layer.frame.style.visibility = 'hidden';
-    layer.frame.src = 'about:blank';
+    // A new iframe element instead of navigating the old one to about:blank: the old browsing
+    // context, its documents, module map and GPU resources go with it (M5: the renderer kept
+    // about 300 MB after all layers were cleared when the frames were only navigated away).
+    const old = layer.frame;
+    old.onload = null;
+    layer.frame = newFrame(layer.n);
+    old.replaceWith(layer.frame);
   }
 
   window.ografRenderer = Object.freeze({

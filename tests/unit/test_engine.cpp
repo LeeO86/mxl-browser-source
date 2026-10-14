@@ -359,3 +359,67 @@ TEST_CASE("a preview is made on request from the newest paint")
     clock.release();
     engine.stop();
 }
+
+TEST_CASE("with the frame pipeline a paint reaches the grain after the next one, and the trace shows it")
+{
+    for (std::uint32_t pipeline : {0U, 1U})
+    {
+        CAPTURE(pipeline);
+        ManualClock clock(3000 * kPeriod);
+        Recorder outputs;
+        util::Metrics metrics("test_");
+        auto settings = small();
+        settings.pipelineGrains = pipeline;
+        Engine engine(settings, clock, outputs, metrics);
+        engine.setRequestFrame([&] {
+            engine.beginFrameSent();
+            engine.beginFrameDispatched();
+        });
+        engine.setPageState(PageState::Ready);
+        engine.start();
+
+        clock.tick(3001); // BeginFrame posted at 3001
+        auto const red = solid(0, 0, 255, 255);
+        engine.paint(red.data(), kWidth * 4, kWidth, kHeight); // its paint
+        waitConverted(engine, 1);
+        clock.tick(3002);
+        clock.tick(3003);
+        CHECK(engine.nextVisibleIndex() == 3004 + pipeline);
+        clock.release();
+        engine.stop();
+
+        auto const transparent = fillOf(solid(0, 0, 0, 0), true);
+        REQUIRE(outputs.video.size() == 3);
+        CHECK(outputs.video[0].fill == transparent);
+        CHECK(outputs.video[1].fill == (pipeline == 0 ? fillOf(red, true) : transparent));
+        CHECK(outputs.video[2].fill == fillOf(red, true));
+        CHECK(engine.stats().latePaints == 0);
+
+        // The trace: the BeginFrame posted and sent, the paint, its conversion and the commit
+        // that wrote it, carrying the BeginFrame's time.
+        auto const trace = engine.trace();
+        std::uint64_t posted = 0;
+        std::uint64_t committedFor = 0;
+        int paints = 0;
+        int converted = 0;
+        for (auto const& e : trace)
+        {
+            if (e.kind == engine::TraceKind::BeginFramePosted && posted == 0)
+            {
+                posted = e.ns;
+            }
+            paints += e.kind == engine::TraceKind::Paint ? 1 : 0;
+            converted += e.kind == engine::TraceKind::ConvertEnd ? 1 : 0;
+            if (e.kind == engine::TraceKind::Commit && e.b != 0)
+            {
+                committedFor = e.b;
+                CHECK(e.a == 3002 + pipeline);
+            }
+        }
+        CHECK(posted == 3001 * kPeriod + kMargin);
+        CHECK(paints == 1);
+        CHECK(converted == 1);
+        CHECK(committedFor == posted);
+        CHECK(metrics.render().find("test_frame_ready_seconds_count 1") != std::string::npos);
+    }
+}

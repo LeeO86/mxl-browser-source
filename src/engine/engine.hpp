@@ -83,10 +83,32 @@ namespace mbs::engine
         std::uint32_t audioChannels = 2;  // 0: no audio flow
         std::uint32_t audioTargetFrames = 2880; // FIFO target (60 ms)
         std::uint32_t videoDelayGrains = 0;
+        std::uint32_t pipelineGrains = 0; // 1: a paint is committed one tick later than it could be, so it has two periods (BROWSER_FRAME_PIPELINE)
         std::uint64_t marginNs = 1'000'000; // wake this long after the grain start (ε)
         Substitute onPageError = Substitute::Hold;
         std::uint32_t previewWidth = 960; // 0: no preview
         unsigned convertThreads = 4;      // bands of rows converted in parallel (latency, not CPU)
+        bool realtime = true;             // tick and converter threads SCHED_FIFO when CAP_SYS_NICE allows
+    };
+
+    /// One event of the frame-loop trace (docs/performance.md, "Where the time goes"). `ns` is TAI.
+    enum class TraceKind : std::uint8_t
+    {
+        Tick,             // a: the grain index the tick thread woke for
+        Commit,           // a: grain index, b: the BeginFrame time of the frame written (0: a repeat)
+        BeginFramePosted, // tick thread posted the BeginFrame
+        BeginFrameSent,   // UI thread called SendExternalBeginFrame
+        Paint,            // OnPaint copied; a: paint sequence, b: OnPaint entry time
+        ConvertStart,     // a: paint sequence, b: its BeginFrame time
+        ConvertEnd,       // a: paint sequence, b: buffer set
+    };
+
+    struct TraceEvent
+    {
+        std::uint64_t ns = 0;
+        TraceKind kind = TraceKind::Tick;
+        std::uint64_t a = 0;
+        std::uint64_t b = 0;
     };
 
     struct EngineStats
@@ -119,8 +141,10 @@ namespace mbs::engine
 
         /// UI thread (OnPaint): copies the paint; the converter takes it.
         void paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height);
-        /// UI thread: a BeginFrame was sent (paint latency is measured from here).
+        /// Tick thread: a BeginFrame was posted to the UI thread (paint latency is measured from here).
         void beginFrameSent();
+        /// UI thread: the posted BeginFrame reached CEF (SendExternalBeginFrame).
+        void beginFrameDispatched();
         void setPageState(PageState state);
         [[nodiscard]] PageState pageState() const { return _pageState.load(); }
 
@@ -147,6 +171,8 @@ namespace mbs::engine
         [[nodiscard]] std::uint64_t nextVisibleIndex() const;
 
         [[nodiscard]] EngineStats stats() const;
+        /// The newest frame-loop events (about the last 40 s at 50 Hz), oldest first.
+        [[nodiscard]] std::vector<TraceEvent> trace() const;
         [[nodiscard]] EngineSettings const& settings() const { return _settings; }
 
     private:
@@ -164,6 +190,7 @@ namespace mbs::engine
         GrainBuffers const& buffers(int id) const;
         int freeSetLocked() const;
         void makePreview(std::uint8_t const* bgra, std::uint64_t ticket);
+        void record(TraceKind kind, std::uint64_t ns, std::uint64_t a = 0, std::uint64_t b = 0);
 
         EngineSettings _settings;
         Clock& _clock;
@@ -175,12 +202,16 @@ namespace mbs::engine
 
         // Grain buffer sets: the pool, the transparent and black frames, and who holds which.
         // The delay ring holds the set that was current at each of the last delay+1 ticks; the
-        // tick writes the oldest. A set is free when neither the ring nor `_ready` holds it.
+        // tick writes the oldest. Converted sets wait in `_pending` (oldest first, at most
+        // pipeline+1). A set is free when neither the ring nor `_pending` holds it.
         std::vector<GrainBuffers> _pool;
+        std::vector<std::uint64_t> _poolBeginFrame; // the BeginFrame time of each set's paint
         GrainBuffers _transparent;
         GrainBuffers _black;
         mutable std::mutex _setsMutex;
-        int _ready = kNone;
+        std::vector<int> _pending;                 // capacity reserved: no allocation per frame
+        std::uint64_t _postedAt[4] = {0, 0, 0, 0}; // BeginFrame posted at tick index % 4 (tick thread)
+        std::uint64_t _tickIndex = 0;              // the grain index of the newest commit (tick thread)
         int _current = kTransparent;
         std::vector<int> _ring;
 
@@ -200,6 +231,7 @@ namespace mbs::engine
 
         // When the newest BeginFrame was sent (TAI ns), for the paint latency.
         std::atomic<std::uint64_t> _lastBeginFrameNs{0};
+        std::uint64_t _paints = 0; // UI thread: paints accepted by the store (its sequence)
 
         // Audio, on the tick thread (the FIFO's producer is CEF's audio thread).
         std::unique_ptr<audio::Fifo> _fifo;
@@ -218,6 +250,13 @@ namespace mbs::engine
         std::uint64_t _previewSequence = 0;
         std::uint64_t _previewServed = 0; // the request ticket the newest preview answered
         std::vector<std::uint8_t> _previewScratch;
+
+        // Frame-loop trace: a ring of the newest events, one short lock per event.
+        static constexpr std::size_t kTraceEvents = 12288;
+        mutable std::mutex _traceMutex;
+        std::vector<TraceEvent> _trace;
+        std::size_t _traceNext = 0;
+        bool _traceFull = false;
 
         mutable std::mutex _statsMutex;
         EngineStats _stats;

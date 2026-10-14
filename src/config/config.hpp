@@ -105,6 +105,9 @@ namespace mbs::config
         int avOffsetMs = 0;
         int videoDelayGrains = -1; // -1 = auto
         int frameLead = 1;
+        bool realtime = true;
+        int framePipeline = 0;
+        int convertThreads = 4;
         Render render = Render::Auto;
         PageErrorMode onPageError = PageErrorMode::Hold;
         int hangTimeoutMs = 3000;
@@ -121,6 +124,7 @@ namespace mbs::config
         std::string apiToken;
         bool persistentProfile = false;
         bool webauthn = false;
+        bool webgpu = false;
         std::string templatesDir;
         std::string ografDir;
         int ografUploadMaxMb = 256;

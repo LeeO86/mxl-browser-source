@@ -652,6 +652,24 @@ namespace mbs::app
             reply(res, 200, statusJson());
             return;
         }
+        if (path == "/api/v1/debug/frame-trace" && method == "GET")
+        {
+            // The frame loop's newest events (docs/api.md): [TAI ns, kind, a, b] each.
+            static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end"};
+            auto const events = _engine->trace();
+            std::string out = R"({"period_ns":)" +
+                              std::to_string(1'000'000'000ULL * _cfg.format.rateDen / _cfg.format.rateNum) + R"(,"events":[)";
+            out.reserve(out.size() + events.size() * 48);
+            bool first = true;
+            for (auto const& e : events)
+            {
+                out += (first ? "[" : ",[") + std::to_string(e.ns) + ",\"" + kKinds[static_cast<int>(e.kind)] + "\"," + std::to_string(e.a) + "," +
+                       std::to_string(e.b) + "]";
+                first = false;
+            }
+            reply(res, 200, out + "]}");
+            return;
+        }
         if (path == "/api/v1/nmos" && method == "GET")
         {
             reply(res, 200, nmosJson());

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Frame-loop benchmark (docs/performance.md, M5): late paints and held frames with n continuously
 animated elements, as one page (templates/frameloop/index.html?n=N) or as n OGraf layers of the lab
-graphic tests/integration/ograf/anim (the same elements at the same places). Every element changes
+graphic tests/integration/ograf/anim (the same elements at the same places), or (mode `ebu`) the
+first n EBU examples on n layers as in the M4 layer test. Every element changes
 on every frame, so every repeated grain while it runs is a held frame.
 
 For each run it records the deltas of the grain counters and of every `*_seconds` histogram over the
@@ -10,8 +11,8 @@ window, the container's CPU, and the host's state before, during and after (load
 stats` of every container, GPU utilisation and memory), and appends one JSON line to the output.
 
     frameloop_bench.py [--base http://127.0.0.1:8460] [--container ograf-mbs] [--gpu 0]
-                       [--seconds 180] [--warmup 15] [--out frameloop.jsonl] [--label text]
-                       page|ograf N [N ...]
+                       [--seconds 180] [--warmup 15] [--out frameloop.jsonl] [--label text] [--trace-dir dir]
+                       page|ograf|ebu N [N ...]
 
 Standard library only. Copies templates/frameloop into the container's /config/templates (so an
 image without the page works too) and uploads the lab graphic once.
@@ -32,6 +33,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 FRAMELOOP = os.path.join(REPO, "templates", "frameloop")
 TARGET = "/ograf/v1/renderers/main/target/graphicInstance"
+# Mode "ebu": the EBU examples in the order of the M4 layer test (docs/performance.md); the form
+# graphic is static once played, the others animate (some only in their in-animation).
+EBU = ["mbs-form", "scoreboard", "l3rd-name", "minimal-example", "minimal-logo", "804a74b8-0076-48b1-a804-4119ba888640",
+       "96123dd7-6e6a-4a0e-8084-4c4b4a2db0c3", "renderer-test"]
 PREFIX = "mxl_browser_source_"
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # the lab's proxy variables never apply
 
@@ -94,6 +99,19 @@ def host_state(container, gpu):
     return state
 
 
+def sample_value(prop):
+    if "default" in prop:
+        return prop["default"]
+    if "enum" in prop:
+        return prop["enum"][0]
+    kind = prop.get("type")
+    if kind == "object":
+        return {k: sample_value(v) for k, v in prop.get("properties", {}).items()}
+    if kind == "array":
+        return []
+    return {"string": "frame loop", "number": 1, "integer": 1, "boolean": True}.get(kind)
+
+
 def anim_zip():
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
@@ -121,7 +139,7 @@ def setup(args, mode, n):
         assert code == 200, body
         return
     code, body = request(base, "GET", "/ograf/v1/graphics/mbs-anim")
-    if code != 200:
+    if code != 200 and mode == "ograf":
         code, body = request(base, "POST", "/api/v1/ograf/graphics", raw=anim_zip())
         assert code in (200, 201), body
     if request(base, "GET", "/api/v1/source")[1].get("mode") != "ograf":
@@ -130,8 +148,13 @@ def setup(args, mode, n):
         time.sleep(3)
     clear_layers(base)
     for layer in range(1, n + 1):
+        graphic, data = "mbs-anim", {"slot": layer - 1}
+        if mode == "ebu":
+            graphic = EBU[layer - 1]
+            schema = request(base, "GET", "/ograf/v1/graphics/" + graphic)[1]["graphic"].get("schema") or {}
+            data = {k: sample_value(v) for k, v in schema.get("properties", {}).items()}
         code, body = request(base, "POST", TARGET + "/load",
-                             {"renderTarget": {"layer": layer}, "graphicId": "mbs-anim", "params": {"data": {"slot": layer - 1}}})
+                             {"renderTarget": {"layer": layer}, "graphicId": graphic, "params": {"data": data}})
         assert code == 200 and body.get("statusCode", 200) < 400, body
         code, body = request(base, "POST", TARGET + "/playAction",
                              {"renderTarget": {"layer": layer}, "graphicInstanceId": body["graphicInstanceId"], "params": {}})
@@ -161,6 +184,12 @@ def run(args, mode, n):
     }
     with open(args.out, "a") as f:
         f.write(json.dumps(result) + "\n")
+    if args.trace_dir:  # the newest frame-loop events (images with GET /api/v1/debug/frame-trace)
+        code, trace = request(args.base, "GET", "/api/v1/debug/frame-trace")
+        if code == 200:
+            os.makedirs(args.trace_dir, exist_ok=True)
+            with open(os.path.join(args.trace_dir, f"{args.label or 'run'}-{mode}-{n}.json"), "w") as f:
+                json.dump(trace, f)
     cpu = [x.get("cpu_pct") for x in result["host"]]
     print(f"{args.label} {mode} n={n}: {d['video']} grains, {paints} paints, held {d['repeated']} ({result['held_pct']} %), "
           f"late {d['late_paints']} ({result['late_pct']} %), missed {d['missed']}, paint mean {h.get('paint_latency_seconds', {}).get('mean_ms')} ms, "
@@ -177,12 +206,13 @@ def main():
     p.add_argument("--warmup", type=float, default=15)
     p.add_argument("--out", default="frameloop.jsonl")
     p.add_argument("--label", default="")
-    p.add_argument("mode", choices=["page", "ograf"])
+    p.add_argument("--trace-dir", default="")
+    p.add_argument("mode", choices=["page", "ograf", "ebu"])
     p.add_argument("n", type=int, nargs="+")
     args = p.parse_args()
     for n in args.n:
         run(args, args.mode, n)
-    if args.mode == "ograf":
+    if args.mode != "page":
         clear_layers(args.base)
 
 
