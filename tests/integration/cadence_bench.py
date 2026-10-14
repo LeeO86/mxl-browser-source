@@ -26,7 +26,7 @@ One JSON line per run goes to --out, raw files (counter, audio, traces) to --dir
 
     cadence_bench.py [--base http://127.0.0.1:8460] [--container ograf-mbs] [--domain /Volumes/mxl/ograf-mbs]
                      [--seconds 120] [--warmup 15] [--content-fps 50] [--label text] [--out runs.jsonl] [--dir raw]
-                     [--smi] [--chromium-trace 30] [--no-navigate] URL
+                     [--smi] [--chromium-trace 30] [--no-navigate] [--reader path] URL
 
 Standard library only.
 """
@@ -145,6 +145,29 @@ PAGE_STATS = r"""(() => {
   if (p && p.getPlayerState) { try { out.playerState = p.getPlayerState(); } catch (e) {} }
   return out;
 })()"""
+
+
+# requestAnimationFrame timestamps are the BeginFrame's frame time. Mapped to wall time through
+# performance.timeOrigin (UTC; TAI = UTC + 37 s), their position in the house period shows the
+# frame clock's phase (and, with external BeginFrames, the jitter of the call time). The mapping's
+# own offset is fixed per document and below a millisecond; the timestamps are coarsened to 100 us.
+RAF_PHASE = r"""new Promise(done => { const t = []; const f = ts => { t.push(performance.timeOrigin + ts); if (t.length < 200) requestAnimationFrame(f); else done(t); }; requestAnimationFrame(f); })"""
+
+
+def raf_phase(devtools, period_ns):
+    stamps = devtools.evaluate(RAF_PHASE)
+    if not stamps:
+        return None
+    import cmath
+    import math
+    p = period_ns / 1e6
+    phases = [((round(ms * 1e6) + 37_000_000_000) % period_ns) / 1e6 for ms in stamps]
+    centre = cmath.phase(sum(cmath.exp(2j * math.pi * x / p) for x in phases)) / (2 * math.pi) * p % p
+    rel = sorted((x - centre + p / 2) % p - p / 2 for x in phases)  # around the circular mean
+    steps = sorted(round(b - a, 2) for a, b in zip(stamps, stamps[1:]))
+    q = lambda f: rel[min(len(rel) - 1, int(f * len(rel)))]  # noqa: E731
+    return {"centre_ms": round(centre, 2) % p, "p5_ms": round((centre + q(0.05)) % p, 2), "p95_ms": round((centre + q(0.95)) % p, 2),
+            "spread_ms": round(q(0.95) - q(0.05), 2), "step_ms": {"min": steps[0], "median": steps[len(steps) // 2], "max": steps[-1]}}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -294,6 +317,7 @@ def main():
     p.add_argument("--chromium-trace", type=int, default=0, help="seconds of Chromium tracing (audio, media, gpu.capture)")
     p.add_argument("--no-navigate", action="store_true")
     p.add_argument("--no-audio", action="store_true")
+    p.add_argument("--reader", default="mxl-bs-grain-reader", help="the grain reader inside the container")
     args = p.parse_args()
     os.makedirs(args.dir, exist_ok=True)
     tag = re.sub(r"[^\w.-]+", "_", args.label or "run")
@@ -324,11 +348,11 @@ def main():
         threads.append(threading.Thread(target=poll_smi, args=(args.gpu, smi_log, stop)))
     for t in threads:
         t.start()
-    readers = [subprocess.Popen([*DOCKER, "exec", args.container, "mxl-bs-grain-reader", "counter", "--domain", args.domain, "--flow", video_flow,
+    readers = [subprocess.Popen([*DOCKER, "exec", args.container, args.reader, "counter", "--domain", args.domain, "--flow", video_flow,
                                  "--width", str(fmt.get("width", 1920)), "--seconds", str(args.seconds), "--out", f"/tmp/{tag}-counter.txt"],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)]
     if audio_flow and not args.no_audio:
-        readers.append(subprocess.Popen([*DOCKER, "exec", args.container, "mxl-bs-grain-reader", "audio", "--domain", args.domain, "--flow", audio_flow,
+        readers.append(subprocess.Popen([*DOCKER, "exec", args.container, args.reader, "audio", "--domain", args.domain, "--flow", audio_flow,
                                          "--seconds", str(args.seconds), "--out", f"/tmp/{tag}-audio.f32"],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
     chromium = None
@@ -345,6 +369,7 @@ def main():
     for t in threads:
         t.join()
     page_after = devtools.evaluate(PAGE_STATS)
+    raf = raf_phase(devtools, int(1e9 / output_fps))
 
     # Raw files.
     subprocess.run([*DOCKER, "cp", f"{args.container}:/tmp/{tag}-counter.txt", os.path.join(args.dir, f"{tag}-counter.txt")], capture_output=True)
@@ -387,7 +412,7 @@ def main():
         "held_late_paint": ft.get("held_late_paint"), "trace_commits": ft.get("commits"),
         "paint_phase_ms": None if not ft.get("paint_phase") else
         {q: round(sorted(ft["paint_phase"])[int(q * (len(ft["paint_phase"]) - 1))] / 1e6, 2) for q in (0.05, 0.5, 0.95)},
-        "anchors": ft.get("anchors"), "cadence": cad,
+        "anchors": ft.get("anchors"), "raf_phase": raf, "cadence": cad,
         "audio_flow": audio, "audio_counters": counters, "audio_status": {"before": a0, "after": a1},
         "cpu_cores": cpu_by_kind(procs0, procs1, seconds), "page": {"before": page_before, "after": page_after},
         "chromium_trace": chromium, "smi_polls": len(smi_log), "histograms": histograms(m0, m1),
@@ -402,7 +427,7 @@ def main():
           f"bf-no-paint {ft.get('begin_frames_without_paint')}; content steps {cad['steps']} repeats {cad['repeats']} "
           f"(fresh {cad['repeats_fresh']}, held {cad['repeats_held']}) skips {cad['skips']} (fresh {cad['skips_fresh']}); "
           f"phase error {(s1.get('frame_clock') or {}).get('phase_error_ms')} ms; audio {audio}; counters {counters}; "
-          f"dropped {dropped}; cpu {result['cpu_cores']}; behind {(chromium or {}).get('generate_more_audio_behind')}", flush=True)
+          f"dropped {dropped}; raf {raf}; cpu {result['cpu_cores']}; behind {(chromium or {}).get('generate_more_audio_behind')}", flush=True)
 
 
 if __name__ == "__main__":
