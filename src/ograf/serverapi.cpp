@@ -229,7 +229,20 @@ namespace mbs::ograf
                 picojson::object metadata;
                 metadata["createdAt"] = picojson::value(graphic->createdAt);
                 metadata["updatedAt"] = picojson::value(graphic->updatedAt);
-                return json(res, 200, picojson::value(picojson::object{{"graphic", graphic->manifest}, {"metadata", picojson::value(metadata)}, {"v_info", withUse(ctx, *graphic)}}));
+                auto out = picojson::value(picojson::object{{"graphic", graphic->manifest}, {"metadata", picojson::value(metadata)}, {"v_info", withUse(ctx, *graphic)}});
+                json(res, 200, out);
+                // `graphic` keeps the manifest file's own key order (picojson sorts keys; a form shows
+                // fields without `order` in the manifest's order): the file's text replaces it, when it
+                // still parses to the same manifest.
+                auto const raw = readFile(ctx.library.filePath(graphic->package, graphic->manifestPath));
+                picojson::value check;
+                if (raw && parseJson(check, *raw).empty() && check == graphic->manifest)
+                {
+                    out.get<picojson::object>().erase("graphic");
+                    auto const rest = out.serialize(); // {"metadata":…,"v_info":…}
+                    res.body = "{\"graphic\":" + *raw + "," + rest.substr(1);
+                }
+                return;
             }
             if (p.size() == 2 && req.method == "DELETE")
             {

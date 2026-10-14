@@ -560,3 +560,31 @@ TEST_CASE("ograf: Server API shapes follow server-api.yaml")
     }
     CHECK(allowed);
 }
+
+TEST_CASE("ograf: GET /graphics/{id} keeps the manifest's key order")
+{
+    TempDir t;
+    Library lib((t.path / "lib").string(), RenderInfo{}, ZipLimits{});
+    lib.load();
+    auto const schema = R"(,"schema":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"number"}}})";
+    REQUIRE(lib.addZip(makeZip(t.path, {{"g.ograf.json", manifest("g", schema)}, {"graphic.mjs", kRuntime}}), {}).status == 200);
+    FakeRenderer page;
+    LayerSet layers(page, lib, (t.path / "layers.json").string(), RenderInfo{});
+    ApiContext ctx{lib, layers, "Browser", "test", {}, {}};
+    mbs::ops::HttpRequest req;
+    req.method = "GET";
+    req.path = "/ograf/v1/graphics/g";
+    mbs::ops::HttpResponse res;
+    handleOgraf(ctx, req, res);
+    REQUIRE(res.status == 200);
+    auto const v = parse(res.body); // still valid JSON
+    CHECK(v.get("graphic").get("id").to_str() == "g");
+    CHECK(v.get("metadata").get("createdAt").is<std::string>());
+    CHECK(v.get("v_info").get("id").to_str() == "g");
+    auto const zeta = res.body.find("\"zeta\"");
+    auto const alpha = res.body.find("\"alpha\"");
+    REQUIRE(zeta != std::string::npos);
+    REQUIRE(alpha != std::string::npos);
+    CHECK(zeta < alpha); // the file's order, not picojson's sorted one
+    CHECK(res.body.find("\"$schema\"") < res.body.find("\"id\""));
+}
