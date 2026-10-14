@@ -17,7 +17,9 @@
 #include <vector>
 
 #include "audio/fifo.hpp"
+#include "audio/gaps.hpp"
 #include "audio/resampler.hpp"
+#include "engine/frameclock.hpp"
 #include "engine/framestore.hpp"
 #include "engine/tick.hpp"
 #include "util/metrics.hpp"
@@ -34,6 +36,8 @@ namespace mbs::engine
         [[nodiscard]] virtual std::uint64_t indexNs(std::uint64_t index) const = 0;  // TAI start of a grain index
         [[nodiscard]] virtual std::uint64_t sampleAt(std::uint64_t index) const = 0; // 48 kHz sample index at that start
         virtual void sleepUntil(std::uint64_t taiNs) = 0;
+        /// TAI − CLOCK_MONOTONIC (Chromium's clock) now; the internal frame clock follows it.
+        [[nodiscard]] virtual std::int64_t monotonicOffsetNs() const { return 0; }
     };
 
     /// The converted buffers of one frame (SPEC §5.3).
@@ -89,6 +93,12 @@ namespace mbs::engine
         std::uint32_t previewWidth = 960; // 0: no preview
         unsigned convertThreads = 4;      // bands of rows converted in parallel (latency, not CPU)
         bool realtime = true;             // tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO (or CAP_SYS_NICE) allows
+        // BROWSER_FRAME_CLOCK=internal: Chromium's own BeginFrames at the house rate, phase-locked
+        // to T(k) + framePhaseNs; the tick sends none. `framePeriodNs` is Chromium's period.
+        bool internalFrameClock = false;
+        std::uint64_t framePeriodNs = 20'000'000;
+        std::uint64_t framePhaseNs = 0;
+        std::uint64_t frameLockThresholdNs = 1'000'000;
     };
 
     /// One event of the frame-loop trace (docs/performance.md, "Where the time goes"). `ns` is TAI.
@@ -101,6 +111,7 @@ namespace mbs::engine
         Paint,            // OnPaint copied; a: paint sequence, b: OnPaint entry time
         ConvertStart,     // a: paint sequence, b: its BeginFrame time
         ConvertEnd,       // a: paint sequence, b: buffer set
+        Anchor,           // internal frame clock anchored; a: target time, b: call time (0: too late, not anchored)
     };
 
     struct TraceEvent
@@ -120,7 +131,12 @@ namespace mbs::engine
         std::uint64_t paintsRejected = 0;  // wrong size (a resize in flight)
         std::uint64_t latePaints = 0;      // paints never committed: a newer one arrived before the tick (late or superseded)
         audio::ResamplerStats audio;
+        std::uint64_t audioGaps = 0;         // upstream losses found in the packet times
+        std::uint64_t audioGapFrames = 0;    // silence put in their place
+        std::uint64_t audioGapsUnfilled = 0; // jumps too long to fill (left to the FIFO)
         std::vector<double> audioPeakDbfs; // per flow channel, last grain
+        bool internalFrameClock = false;
+        FrameClockStats frameClock;
     };
 
     class Engine final : TickActions
@@ -134,6 +150,13 @@ namespace mbs::engine
 
         /// Posts one BeginFrame to the UI thread. Set before start().
         void setRequestFrame(std::function<void()> request);
+        /// Internal frame clock: asks the UI thread to call SetWindowlessFrameRate at TAI `targetNs`
+        /// and to report with frameClockAnchored(). Set before start().
+        void setAnchorFrameClock(std::function<void(std::uint64_t targetNs)> anchor);
+        /// UI thread: the anchor for `targetNs` ran at TAI `calledNs` (0: too late, not run).
+        void frameClockAnchored(std::uint64_t targetNs, std::uint64_t calledNs);
+        /// A new compositor timebase may have come with a new renderer view: anchor again.
+        void relockFrameClock(LockReason reason);
         /// Starts the converter and the tick thread.
         void start();
         /// Stops both after the current grain. Idempotent.
@@ -151,10 +174,14 @@ namespace mbs::engine
         void setPageState(PageState state);
         [[nodiscard]] PageState pageState() const { return _pageState.load(); }
 
-        /// CEF's audio thread: one packet of planar float samples.
-        void pushAudio(float const* const* planes, int planeCount, std::size_t frames);
+        /// CEF's audio thread: one packet of planar float samples, captured at `ptsMs` (CLOCK_MONOTONIC
+        /// in ms; < 0: unknown, no gap detection).
+        void pushAudio(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs = -1);
+        /// A new audio stream begins (its packet times start a new timeline).
+        void audioStreamStarted();
         /// No page audio (no stream, or the source has `audio: false`): the flow carries silence.
-        void setAudioActive(bool active);
+        /// `drain`: the stream ended, so what the FIFO still holds is played out first.
+        void setAudioActive(bool active, bool drain = false);
         void setAvOffsetMs(int offsetMs);
 
         void setEnabled(Flow flow, bool enabled);
@@ -187,6 +214,7 @@ namespace mbs::engine
         bool commit(std::uint64_t index, PageState state) override;
         void writeAudio(std::uint64_t index) override;
         void requestFrame() override;
+        [[nodiscard]] std::uint64_t internalBeginFrameNs(std::uint64_t nowNs) const;
 
         void converterLoop();
         void tickLoop();
@@ -240,7 +268,20 @@ namespace mbs::engine
         std::unique_ptr<audio::Resampler> _resampler;
         std::vector<float> _audioBuffer;
         std::atomic<bool> _audioActive{false};
+        std::atomic<bool> _audioDrain{false};
+        std::atomic<std::uint64_t> _audioStream{0}; // stream generation, counted up at each start
         bool _audioWasActive = false;
+        bool _audioDraining = false;
+        std::uint64_t _audioStreamSeen = 0;         // tick thread
+        std::uint64_t _audioStreamProducer = 0;     // audio thread
+        audio::GapDetector _gaps;                   // audio thread
+        std::atomic<std::uint64_t> _audioGaps{0};
+        std::atomic<std::uint64_t> _audioGapFrames{0};
+        std::atomic<std::uint64_t> _audioGapsUnfilled{0};
+
+        // Internal frame clock.
+        std::unique_ptr<FrameClock> _frameClock;
+        std::function<void(std::uint64_t)> _anchorFrameClock;
         std::atomic<int> _avOffsetMs{0};
         int _appliedAvOffsetMs = 0;
 

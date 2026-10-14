@@ -388,13 +388,31 @@ namespace mbs::app
         es.realtime = _cfg.realtime;
         es.pipelineGrains = static_cast<std::uint32_t>(_cfg.framePipeline);
         es.convertThreads = static_cast<unsigned>(_cfg.convertThreads);
+        if (_cfg.frameClock == config::FrameClockMode::Internal)
+        {
+            // Chromium's frame rate is an integer and its period whole microseconds
+            // (CefRenderWidgetHostViewOSR::SetFrameRate): 59.94 and 29.97 cannot be expressed
+            // and keep external BeginFrames.
+            if (_cfg.format.rateNum % _cfg.format.rateDen == 0 && 1'000'000 % (_cfg.format.rateNum / _cfg.format.rateDen) == 0)
+            {
+                es.internalFrameClock = true;
+                es.framePeriodNs = 1'000'000'000ULL * static_cast<std::uint64_t>(_cfg.format.rateDen) / static_cast<std::uint64_t>(_cfg.format.rateNum);
+                es.framePhaseNs = static_cast<std::uint64_t>(_cfg.frameClockPhaseMs) * 1'000'000ULL;
+            }
+            else
+            {
+                log::warn("frame_clock_fallback", {{"format", _cfg.format.name}, {"reason", "the internal frame clock needs an integer frame rate; using external BeginFrames"}});
+            }
+        }
+        _internalFrameClock = es.internalFrameClock;
         _engine = std::make_unique<engine::Engine>(es, *_clock, *_outputs, _metrics);
         _engine->setAvOffsetMs(_cfg.avOffsetMs);
         for (auto const& [name, enabled] : _doc->senders())
         {
             _engine->setEnabled(name == "key" ? engine::Flow::Key : name == "audio" ? engine::Flow::Audio : engine::Flow::Video, enabled);
         }
-        log::info("mxl_ready", {{"domain", _domainDir}, {"domain_id", _domainId}, {"video_delay_grains", es.videoDelayGrains}});
+        log::info("mxl_ready", {{"domain", _domainDir}, {"domain_id", _domainId}, {"video_delay_grains", es.videoDelayGrains},
+                                   {"frame_clock", es.internalFrameClock ? "internal" : "external"}, {"frame_clock_phase_ms", static_cast<int>(es.framePhaseNs / 1'000'000)}});
     }
 
     void Application::prepareBrowserEnvironment()
@@ -496,6 +514,8 @@ namespace mbs::app
         bs.deviceScaleFactor = source.deviceScaleFactor;
         bs.frameRate = static_cast<int>(std::ceil(static_cast<double>(_cfg.format.rateNum) / static_cast<double>(_cfg.format.rateDen)));
         bs.background = config::parseBackground(source.background).value_or(0);
+        bs.externalBeginFrames = !_internalFrameClock;
+        bs.audioChannels = _cfg.audioChannels;
         bs.popupsSameWindow = _cfg.popupsSameWindow;
         bs.confirmAccept = _cfg.confirmAccept;
         _browser = std::make_unique<cef::Browser>(bs, *this, urlPolicy(source.mode));
@@ -520,6 +540,15 @@ namespace mbs::app
                 auto const posted = _engine->beginFrameSent();
                 _browser->beginFrame([this, posted] { _engine->beginFrameDispatched(posted); });
             }
+        });
+        _engine->setAnchorFrameClock([this](std::uint64_t target) {
+            if (!_browserReady.load())
+            {
+                _engine->frameClockAnchored(target, 0);
+                return;
+            }
+            _browser->anchorFrameClock(
+                target, [this] { return _clock->nowNs(); }, [this, target](std::uint64_t called) { _engine->frameClockAnchored(target, called); });
         });
         _engine->setAudioActive(false);
         _browser->create();
@@ -644,6 +673,7 @@ namespace mbs::app
     void Application::onBrowserCreated()
     {
         _browserReady.store(true);
+        _engine->relockFrameClock(engine::LockReason::Start);
         _browser->invalidate();
         log::info("browser_created", {});
     }
@@ -690,13 +720,15 @@ namespace mbs::app
             _audioStream = true;
             active = _doc->source().audio;
         }
+        _engine->audioStreamStarted();
         _engine->setAudioActive(active);
+        _metrics.inc("audio_stream_events_total", {{"event", "started"}});
         log::info("audio_stream_started", {{"channels", channels}});
     }
 
-    void Application::onAudioPacket(float const* const* planes, int channels, int frames)
+    void Application::onAudioPacket(float const* const* planes, int channels, int frames, std::int64_t ptsMs)
     {
-        _engine->pushAudio(planes, channels, static_cast<std::size_t>(frames));
+        _engine->pushAudio(planes, channels, static_cast<std::size_t>(frames), ptsMs);
     }
 
     void Application::onAudioStopped()
@@ -705,7 +737,17 @@ namespace mbs::app
             std::lock_guard lock{_pageMutex};
             _audioStream = false;
         }
-        _engine->setAudioActive(false);
+        // CEF stops the stream 2 s after the page went quiet (or after an error): play out what
+        // the FIFO still holds instead of cutting it.
+        _engine->setAudioActive(false, true);
+        _metrics.inc("audio_stream_events_total", {{"event", "stopped"}});
+        log::info("audio_stream_stopped", {});
+    }
+
+    void Application::onAudioError(std::string const& message)
+    {
+        _metrics.inc("audio_stream_events_total", {{"event", "error"}});
+        log::warn("audio_stream_error", {{"message", message}});
     }
 
     void Application::onLoadStart(std::string const& url)
@@ -753,6 +795,7 @@ namespace mbs::app
         _metrics.inc("page_loads_total", {{"result", httpStatus >= 400 ? "error" : "ok"}});
         _metrics.observe("page_load_seconds", {}, seconds);
         setPage(PageStatus::Loaded, "");
+        _engine->relockFrameClock(engine::LockReason::Load); // a new renderer view starts its own timebase
         injectAfterLoad();
         if (url.starts_with(kOgrafUrl))
         {

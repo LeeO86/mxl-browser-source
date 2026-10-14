@@ -250,7 +250,12 @@ namespace mbs::app
                std::to_string(stats.latePaints) + R"(,"begin_frames":)" + std::to_string(stats.tick.beginFrames) + R"(},"audio":{"channels":)" +
                std::to_string(_cfg.audioChannels) + R"(,"stream":)" + (stream ? "true" : "false") + R"(,"drift_ppm":)" + std::to_string(stats.audio.driftPpm) +
                R"(,"buffer_ms":)" + std::to_string(stats.audio.fillSeconds * 1000.0) + R"(,"peaks_dbfs":)" + peaks + R"(,"underruns":)" +
-               std::to_string(stats.audio.underruns) + R"(,"overruns":)" + std::to_string(stats.audio.overruns) + R"(},"interact":{"sessions":)" +
+               std::to_string(stats.audio.underruns) + R"(,"overruns":)" + std::to_string(stats.audio.overruns) + R"(,"gaps":)" +
+               std::to_string(stats.audioGaps) + R"(,"gap_ms":)" + std::to_string(static_cast<double>(stats.audioGapFrames) / 48.0) + R"(,"gaps_unfilled":)" +
+               std::to_string(stats.audioGapsUnfilled) + R"(},"frame_clock":{"mode":)" + (stats.internalFrameClock ? R"("internal")" : R"("external")") +
+               R"(,"locked":)" + (stats.frameClock.locked ? "true" : "false") + R"(,"phase_error_ms":)" +
+               std::to_string(static_cast<double>(stats.frameClock.phaseErrorNs) / 1e6) + R"(,"locks":)" +
+               std::to_string(stats.frameClock.locks[0] + stats.frameClock.locks[1] + stats.frameClock.locks[2]) + R"(},"interact":{"sessions":)" +
                std::to_string(_interact->sessions()) + R"(,"controlled":)" + (_interact->controlled() ? "true" : "false") + R"(},"nmos":)" + nmosJson() +
                R"(,"devtools":{"enabled":)" + (_cfg.devtools ? "true" : "false") + R"(,"sessions":)" + std::to_string(_devtoolsSessions.load()) + "}}";
     }
@@ -273,6 +278,17 @@ namespace mbs::app
         m.setCounter("missed_grains_total", {}, static_cast<double>(s.tick.missed));
         m.setCounter("begin_frames_total", {}, static_cast<double>(s.tick.beginFrames));
         m.setCounter("late_paints_total", {}, static_cast<double>(s.latePaints));
+        m.clear("frame_clock");
+        m.set("frame_clock", {{"mode", s.internalFrameClock ? "internal" : "external"}}, 1);
+        if (s.internalFrameClock)
+        {
+            m.set("frame_clock_phase_error_seconds", {}, static_cast<double>(s.frameClock.phaseErrorNs) / 1e9);
+            for (std::size_t r = 0; r < engine::kLockReasons.size(); ++r)
+            {
+                m.setCounter("frame_clock_locks_total", {{"reason", engine::kLockReasons[r]}}, static_cast<double>(s.frameClock.locks[r]));
+            }
+            m.setCounter("frame_clock_late_anchors_total", {}, static_cast<double>(s.frameClock.lateAnchors));
+        }
         m.setCounter("paints_dropped_total", {}, static_cast<double>(s.paintsDropped));
         m.setCounter("mxl_write_failures_total", {}, _outputs ? static_cast<double>(_outputs->failures()) : 0.0);
         if (_cfg.audioChannels > 0)
@@ -281,6 +297,10 @@ namespace mbs::app
             m.setCounter("audio_underruns_total", {}, static_cast<double>(s.audio.underruns));
             m.setCounter("audio_overruns_total", {}, static_cast<double>(s.audio.overruns));
             m.setCounter("audio_resets_total", {}, static_cast<double>(s.audio.resets));
+            m.setCounter("audio_underrun_seconds_total", {}, static_cast<double>(s.audio.underrunFrames) / 48000.0);
+            m.setCounter("audio_realigned_seconds_total", {}, static_cast<double>(s.audio.realigned) / 48000.0);
+            m.setCounter("audio_gaps_total", {}, static_cast<double>(s.audioGaps));
+            m.setCounter("audio_gap_seconds_total", {}, static_cast<double>(s.audioGapFrames) / 48000.0);
             m.set("audio_drift_ppm", {}, s.audio.driftPpm);
             m.set("audio_buffer_seconds", {}, s.audio.fillSeconds);
             for (std::size_t c = 0; c < s.audioPeakDbfs.size(); ++c)
@@ -655,10 +675,11 @@ namespace mbs::app
         if (path == "/api/v1/debug/frame-trace" && method == "GET")
         {
             // The frame loop's newest events (docs/api.md): [TAI ns, kind, a, b] each.
-            static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end"};
+            static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end", "anchor"};
             auto const events = _engine->trace();
-            std::string out = R"({"period_ns":)" +
-                              std::to_string(1'000'000'000ULL * _cfg.format.rateDen / _cfg.format.rateNum) + R"(,"events":[)";
+            std::string out = R"({"period_ns":)" + std::to_string(1'000'000'000ULL * _cfg.format.rateDen / _cfg.format.rateNum) +
+                              R"(,"frame_clock":)" + (_internalFrameClock ? R"("internal")" : R"("external")") + R"(,"phase_ns":)" +
+                              std::to_string(_internalFrameClock ? static_cast<std::uint64_t>(_cfg.frameClockPhaseMs) * 1'000'000ULL : 0) + R"(,"events":[)";
             out.reserve(out.size() + events.size() * 48);
             bool first = true;
             for (auto const& e : events)

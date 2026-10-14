@@ -20,6 +20,10 @@ namespace mbs::audio
         /// not fit and is dropped.
         std::size_t push(float const* const* planes, int planeCount, std::size_t frames, std::uint64_t nowNs);
 
+        /// Producer. Appends `frames` frames of silence (an upstream gap, SPEC §6). Returns the
+        /// frames stored.
+        std::size_t pushSilence(std::size_t frames);
+
         /// When the last packet arrived and how long it was (frames), for the fill estimate.
         [[nodiscard]] std::uint64_t lastPushNs() const { return _lastPushNs.load(std::memory_order_acquire); }
         [[nodiscard]] std::size_t lastPushFrames() const { return _lastPushFrames.load(std::memory_order_acquire); }

@@ -31,7 +31,7 @@ namespace mbs::engine
             ++(state == PageState::Ready ? _counters.repeated : _counters.repeatedHold);
         }
         _actions.writeAudio(index);
-        if (state != PageState::Crashed)
+        if (_sendBeginFrames && state != PageState::Crashed)
         {
             _actions.requestFrame();
             ++_counters.beginFrames;

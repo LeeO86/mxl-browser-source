@@ -21,8 +21,12 @@ namespace mbs::cef
         virtual void onPaint(void const* bgra, int stride, int width, int height) = 0;
 
         virtual void onAudioStarted(int channels, int sampleRate) = 0;
-        virtual void onAudioPacket(float const* const* planes, int channels, int frames) = 0;
+        /// `ptsMs`: the packet's capture time, CLOCK_MONOTONIC in whole milliseconds.
+        virtual void onAudioPacket(float const* const* planes, int channels, int frames, std::int64_t ptsMs) = 0;
         virtual void onAudioStopped() = 0;
+        /// OnAudioStreamError. CEF stops the stream itself (onAudioStopped follows) unless the error
+        /// is a socket error, after which packets keep coming.
+        virtual void onAudioError(std::string const& message) = 0;
 
         virtual void onLoadStart(std::string const& url) = 0;
         virtual void onLoadEnd(std::string const& url, int httpStatus) = 0;

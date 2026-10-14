@@ -75,7 +75,8 @@ namespace mbs::app
         void onBrowserClosed() override;
         void onPaint(void const* bgra, int stride, int width, int height) override;
         void onAudioStarted(int channels, int sampleRate) override;
-        void onAudioPacket(float const* const* planes, int channels, int frames) override;
+        void onAudioPacket(float const* const* planes, int channels, int frames, std::int64_t ptsMs) override;
+        void onAudioError(std::string const& message) override;
         void onAudioStopped() override;
         void onLoadStart(std::string const& url) override;
         void onLoadEnd(std::string const& url, int httpStatus) override;
@@ -230,6 +231,7 @@ namespace mbs::app
         std::uint64_t _jpegGrain = 0;
 
         std::atomic<bool> _browserReady{false};
+        bool _internalFrameClock = false; // BROWSER_FRAME_CLOCK=internal in effect (not for 59.94/29.97)
         std::atomic<bool> _writersOpen{false};
         std::atomic<bool> _registered{false};
         std::atomic<bool> _stopping{false};

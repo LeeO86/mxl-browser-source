@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // CEF in this process (SPEC §2.3, §5.5): initialisation with the switches of the render mode,
-// one windowless browser driven by external BeginFrames, and the facade the rest of the
-// application uses. Every CefBrowserHost call is posted to the UI thread.
+// one windowless browser driven by external BeginFrames or by its own frame clock (SPEC §2.4),
+// and the facade the rest of the application uses. Every CefBrowserHost call is posted to the
+// UI thread.
 #pragma once
 
 #include <atomic>
@@ -52,6 +53,8 @@ namespace mbs::cef
         int height = 1080;
         double deviceScaleFactor = 1.0;
         int frameRate = 50; // windowless_frame_rate, rounded up
+        bool externalBeginFrames = true; // false: Chromium's own frame clock at frameRate (BROWSER_FRAME_CLOCK=internal)
+        int audioChannels = 2;           // the layout GetAudioParameters asks for: 8 and 16 ask for 7.1, else stereo
         std::uint32_t background = 0; // 0xAARRGGBB, 0 = transparent
         bool popupsSameWindow = false;
         bool confirmAccept = false;
@@ -97,6 +100,11 @@ namespace mbs::cef
 
         /// Posts one SendExternalBeginFrame to the UI thread; `sent` runs there right before it.
         void beginFrame(std::function<void()> sent = {});
+        /// Internal frame clock: calls SetWindowlessFrameRate on the UI thread when `now()` (TAI)
+        /// reaches `targetNs`, which sets the timebase of Chromium's BeginFrames to that moment.
+        /// `done` gets the TAI time of the call, or 0 when the UI thread came too late (or there is
+        /// no browser) and nothing was called.
+        void anchorFrameClock(std::uint64_t targetNs, std::function<std::uint64_t()> now, std::function<void(std::uint64_t)> done);
         void invalidate();
         void navigate(std::string const& url);
         void reload(bool ignoreCache);

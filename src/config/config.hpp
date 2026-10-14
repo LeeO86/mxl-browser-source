@@ -58,6 +58,13 @@ namespace mbs::config
         Gpu,
         Software
     };
+    /// Who paces the page (SPEC §2.4): one external BeginFrame per grain, or Chromium's own
+    /// BeginFrame source at the house rate, phase-locked to TAI.
+    enum class FrameClockMode
+    {
+        External,
+        Internal
+    };
     enum class PageErrorMode
     {
         Hold,
@@ -107,6 +114,8 @@ namespace mbs::config
         int frameLead = 1;
         bool realtime = true;
         int framePipeline = 1;
+        FrameClockMode frameClock = FrameClockMode::External;
+        int frameClockPhaseMs = 0; // φ: Chromium's BeginFrames at T(k) + φ (internal clock)
         int convertThreads = 4;
         Render render = Render::Auto;
         PageErrorMode onPageError = PageErrorMode::Hold;

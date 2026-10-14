@@ -37,6 +37,20 @@ namespace mbs::app
             return static_cast<std::uint64_t>(U128{index} * 48000U * static_cast<std::uint64_t>(_rate.denominator) / static_cast<std::uint64_t>(_rate.numerator));
         }
 
+        /// TAI − CLOCK_MONOTONIC, from a monotonic reading on each side of the TAI one.
+        [[nodiscard]] std::int64_t monotonicOffsetNs() const override
+        {
+            auto const mono = [] {
+                timespec ts{};
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                return static_cast<std::int64_t>(ts.tv_sec) * 1'000'000'000LL + ts.tv_nsec;
+            };
+            auto const before = mono();
+            auto const tai = static_cast<std::int64_t>(mxlGetTime());
+            auto const after = mono();
+            return tai - (before + (after - before) / 2);
+        }
+
         void sleepUntil(std::uint64_t taiNs) override
         {
             timespec ts{};

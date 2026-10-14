@@ -100,6 +100,11 @@ namespace mbs::engine
             _stats.audioPeakDbfs.assign(_settings.audioChannels, -120.0);
         }
 
+        if (_settings.internalFrameClock)
+        {
+            _frameClock = std::make_unique<FrameClock>(_settings.framePeriodNs, _settings.framePhaseNs, _settings.frameLockThresholdNs);
+        }
+
         if (_settings.previewWidth > 0)
         {
             _previewWidth = std::max<std::uint32_t>(2, std::min(_settings.previewWidth, _settings.width) & ~1U);
@@ -117,6 +122,40 @@ namespace mbs::engine
     void Engine::setRequestFrame(std::function<void()> request)
     {
         _requestFrame = std::move(request);
+    }
+
+    void Engine::setAnchorFrameClock(std::function<void(std::uint64_t)> anchor)
+    {
+        _anchorFrameClock = std::move(anchor);
+    }
+
+    void Engine::frameClockAnchored(std::uint64_t targetNs, std::uint64_t calledNs)
+    {
+        if (!_frameClock)
+        {
+            return;
+        }
+        _frameClock->anchored(targetNs, calledNs, _clock.monotonicOffsetNs());
+        record(TraceKind::Anchor, calledNs != 0 ? calledNs : _clock.nowNs(), targetNs, calledNs);
+    }
+
+    void Engine::relockFrameClock(LockReason reason)
+    {
+        if (_frameClock)
+        {
+            _frameClock->relock(reason);
+        }
+    }
+
+    std::uint64_t Engine::internalBeginFrameNs(std::uint64_t nowNs) const
+    {
+        // The newest of Chromium's BeginFrames at or before `nowNs`: T(n) + φ.
+        auto const phase = _settings.framePhaseNs;
+        if (nowNs < phase)
+        {
+            return 0;
+        }
+        return _clock.indexNs(_clock.indexAt(nowNs - phase)) + phase;
     }
 
     void Engine::start()
@@ -151,7 +190,9 @@ namespace mbs::engine
     void Engine::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
     {
         auto const now = _clock.nowNs();
-        auto const sent = _dispatchedNs.load();
+        // External: the newest BeginFrame dispatched before the paint. Internal: the newest of
+        // Chromium's own BeginFrames, which the frame clock keeps at T(n) + φ.
+        auto const sent = _frameClock ? internalBeginFrameNs(now) : _dispatchedNs.load();
         if (!_store.paint(bgra, stride, width, height, FrameStore::Stamp{sent, now, 0}))
         {
             std::lock_guard lock{_statsMutex};
@@ -222,17 +263,40 @@ namespace mbs::engine
         _pageState.store(state);
     }
 
-    void Engine::pushAudio(float const* const* planes, int planeCount, std::size_t frames)
+    void Engine::pushAudio(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs)
     {
-        if (_fifo)
+        if (!_fifo)
         {
-            // Page channels beyond the flow's count are dropped, missing ones are silent.
-            _fifo->push(planes, planeCount, frames, _clock.nowNs());
+            return;
         }
+        if (auto const stream = _audioStream.load(); stream != _audioStreamProducer)
+        {
+            _audioStreamProducer = stream;
+            _gaps.reset();
+        }
+        if (ptsMs >= 0)
+        {
+            // An upstream loss: exactly its length of silence goes first (SPEC §6).
+            if (auto const lost = _gaps.onPacket(ptsMs, frames); lost > 0)
+            {
+                _fifo->pushSilence(lost);
+            }
+            _audioGaps.store(_gaps.gaps(), std::memory_order_relaxed);
+            _audioGapFrames.store(_gaps.gapFrames(), std::memory_order_relaxed);
+            _audioGapsUnfilled.store(_gaps.unfilled(), std::memory_order_relaxed);
+        }
+        // Page channels beyond the flow's count are dropped, missing ones are silent.
+        _fifo->push(planes, planeCount, frames, _clock.nowNs());
     }
 
-    void Engine::setAudioActive(bool active)
+    void Engine::audioStreamStarted()
     {
+        _audioStream.fetch_add(1);
+    }
+
+    void Engine::setAudioActive(bool active, bool drain)
+    {
+        _audioDrain.store(!active && drain);
         _audioActive.store(active);
     }
 
@@ -283,7 +347,10 @@ namespace mbs::engine
     {
         // The BeginFrame of the current grain may still draw it; its paint is committed at the
         // next tick and leaves the delay ring videoDelayGrains later.
-        return _clock.indexAt(_clock.nowNs()) + 1 + _settings.pipelineGrains + _settings.videoDelayGrains;
+        // Internal frame clock: Chromium's next BeginFrame is at T(k) + φ, the same place.
+        auto const now = _clock.nowNs();
+        auto const base = _frameClock && now >= _settings.framePhaseNs ? now - _settings.framePhaseNs : now;
+        return _clock.indexAt(base) + 1 + _settings.pipelineGrains + _settings.videoDelayGrains;
     }
 
     EngineStats Engine::stats() const
@@ -292,6 +359,14 @@ namespace mbs::engine
         EngineStats out = _stats;
         out.paintsDropped = _store.dropped();
         out.latePaints = out.paintsDropped + out.convertedUnused;
+        out.audioGaps = _audioGaps.load(std::memory_order_relaxed);
+        out.audioGapFrames = _audioGapFrames.load(std::memory_order_relaxed);
+        out.audioGapsUnfilled = _audioGapsUnfilled.load(std::memory_order_relaxed);
+        out.internalFrameClock = _frameClock != nullptr;
+        if (_frameClock)
+        {
+            out.frameClock = _frameClock->stats();
+        }
         return out;
     }
 
@@ -424,6 +499,7 @@ namespace mbs::engine
             log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs RLIMIT_RTPRIO >= 10 or CAP_SYS_NICE"}});
         }
         Tick tick(*this);
+        tick.sendBeginFrames(!_frameClock); // internal: Chromium paces itself
         std::uint64_t next = _clock.indexAt(_clock.nowNs()) + 1;
         while (!_stop.load())
         {
@@ -443,6 +519,13 @@ namespace mbs::engine
             {
                 std::lock_guard lock{_statsMutex};
                 _stats.tick = tick.counters();
+            }
+            if (_frameClock && _anchorFrameClock)
+            {
+                if (auto const target = _frameClock->poll(_clock.indexNs(now + 1), _clock.monotonicOffsetNs(), _clock.nowNs()); target != 0)
+                {
+                    _anchorFrameClock(target);
+                }
             }
             next = now + 1;
         }
@@ -517,20 +600,34 @@ namespace mbs::engine
             _resampler->setTarget(*_fifo, static_cast<std::size_t>(target));
         }
         bool const active = _audioActive.load();
+        auto const stream = _audioStream.load();
         float* out = _audioBuffer.data();
         if (active)
         {
-            if (!_audioWasActive)
+            if (!_audioWasActive || stream != _audioStreamSeen)
             {
-                _resampler->reset(*_fifo); // a new stream starts from the target fill
+                _resampler->start(); // a stream starts at the target fill (its first sample is not cut)
             }
+            _audioDraining = false;
             _resampler->produce(*_fifo, out, frames, _clock.nowNs());
         }
         else
         {
-            std::fill(out, out + frames * channels, 0.f); // the flow never stops (SPEC §6)
+            if (_audioWasActive)
+            {
+                _audioDraining = _audioDrain.load(); // the stream ended: play out what the FIFO holds
+            }
+            if (_audioDraining)
+            {
+                _audioDraining = _resampler->drain(*_fifo, out, frames);
+            }
+            else
+            {
+                std::fill(out, out + frames * channels, 0.f); // the flow never stops (SPEC §6)
+            }
         }
         _audioWasActive = active;
+        _audioStreamSeen = stream;
         if (_audioEnabled.load())
         {
             _outputs.writeAudio(end, out, frames);

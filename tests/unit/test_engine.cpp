@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -59,6 +60,12 @@ namespace
             }
             std::unique_lock lock{_mutex};
             REQUIRE(_changed.wait_for(lock, std::chrono::seconds(5), [&] { return _sleeper > _now; }));
+        }
+        /// Moves the time without waking the tick (paints and audio between ticks).
+        void set(std::uint64_t ns)
+        {
+            std::lock_guard lock{_mutex};
+            _now = ns;
         }
         void release()
         {
@@ -471,4 +478,212 @@ TEST_CASE("a paint belongs to the newest BeginFrame dispatched before it, not to
     REQUIRE(owners.size() == 2);
     CHECK(owners[0] == posted.at(0));
     CHECK(owners[1] == posted.at(1));
+}
+
+TEST_CASE("with the internal frame clock the tick sends no BeginFrames and anchors Chromium's clock at T(k+1) + phase")
+{
+    ManualClock clock(6000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    auto settings = small();
+    settings.internalFrameClock = true;
+    settings.framePeriodNs = kPeriod;
+    settings.framePhaseNs = 5'000'000;
+    settings.pipelineGrains = 1;
+    Engine engine(settings, clock, outputs, metrics);
+    int requested = 0;
+    std::mutex mutex;
+    std::vector<std::uint64_t> anchors;
+    engine.setRequestFrame([&] { ++requested; });
+    engine.setAnchorFrameClock([&](std::uint64_t target) {
+        std::lock_guard lock{mutex};
+        anchors.push_back(target);
+    });
+    engine.setPageState(PageState::Ready);
+    engine.start();
+
+    clock.tick(6001);
+    clock.tick(6002); // one anchor in flight: no second one
+    {
+        std::lock_guard lock{mutex};
+        REQUIRE(anchors.size() == 1);
+        CHECK(anchors[0] == 6002 * kPeriod + 5'000'000);
+    }
+    engine.frameClockAnchored(anchors[0], anchors[0] + 30'000);
+    CHECK(engine.stats().frameClock.locked);
+    CHECK(engine.stats().frameClock.phaseErrorNs == 30'000);
+
+    // A paint 12 ms after T(6002): it belongs to Chromium's BeginFrame at T(6002) + 5 ms.
+    clock.set(6002 * kPeriod + 12'000'000);
+    auto const red = solid(0, 0, 255, 255);
+    engine.paint(red.data(), kWidth * 4, kWidth, kHeight);
+    waitConverted(engine, 1);
+    clock.tick(6003);
+    clock.tick(6004);
+    // A load locks again.
+    engine.relockFrameClock(engine::LockReason::Load);
+    clock.tick(6005);
+    // Chromium's newest BeginFrame (T(6004) + 5 ms) may still draw a change, as the external
+    // BeginFrame of the current grain does; the pipeline adds one.
+    CHECK(engine.nextVisibleIndex() == 6004 + 1 + 1);
+    clock.release();
+    engine.stop();
+
+    CHECK(requested == 0);
+    CHECK(engine.stats().tick.beginFrames == 0);
+    {
+        std::lock_guard lock{mutex};
+        REQUIRE(anchors.size() == 2);
+        CHECK(anchors[1] == 6006 * kPeriod + 5'000'000);
+    }
+    REQUIRE(outputs.video.size() == 5);
+    CHECK(outputs.video[2].fill == fillOf(red, true)); // committed at 6003
+    bool anchored = false;
+    for (auto const& e : engine.trace())
+    {
+        if (e.kind == engine::TraceKind::ConvertStart)
+        {
+            CHECK(e.b == 6002 * kPeriod + 5'000'000);
+        }
+        anchored = anchored || (e.kind == engine::TraceKind::Anchor && e.a == 6002 * kPeriod + 5'000'000 && e.b == e.a + 30'000);
+    }
+    CHECK(anchored);
+    CHECK(metrics.render().find("test_paint_latency_seconds_count 1") != std::string::npos);
+}
+
+namespace
+{
+    // Two 10 ms packets of 0.5 per call, stamped with their capture time in ms.
+    struct PacketSource
+    {
+        std::int64_t pts = 100'000;
+        std::vector<float> data = std::vector<float>(480, 0.5f);
+        void push(Engine& engine, int packets = 2)
+        {
+            float const* planes[2] = {data.data(), data.data()};
+            for (int i = 0; i < packets; ++i)
+            {
+                engine.pushAudio(planes, 2, 480, pts);
+                pts += 10;
+            }
+        }
+    };
+
+    // Frames of channel 1 below 0.01 between the first and the last loud one.
+    std::size_t quietInside(Recorder const& outputs)
+    {
+        std::vector<float> left;
+        for (auto const& [end, samples] : outputs.audio)
+        {
+            for (std::size_t i = 0; i < samples.size(); i += 2)
+            {
+                left.push_back(samples[i]);
+            }
+        }
+        std::size_t first = left.size();
+        std::size_t last = 0;
+        for (std::size_t i = 0; i < left.size(); ++i)
+        {
+            if (std::fabs(left[i]) > 0.25f)
+            {
+                first = std::min(first, i);
+                last = i;
+            }
+        }
+        std::size_t quiet = 0;
+        for (std::size_t i = first; i < last; ++i)
+        {
+            quiet += std::fabs(left[i]) < 0.01f ? 1 : 0;
+        }
+        return quiet;
+    }
+}
+
+TEST_CASE("an upstream loss in the packet times becomes a gap of exactly its length, not an underrun")
+{
+    ManualClock clock(7000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    Engine engine(small(), clock, outputs, metrics);
+    engine.setPageState(PageState::Ready);
+    engine.audioStreamStarted();
+    engine.setAudioActive(true);
+    engine.start();
+    PacketSource source;
+    std::uint64_t k = 7001;
+    for (; k < 7021; ++k)
+    {
+        source.push(engine);
+        clock.tick(k);
+    }
+    // The loopback falls behind and skips ahead by 20 ms: this tick gets nothing, the next the
+    // packets after the skip.
+    clock.tick(k++);
+    source.pts += 20;
+    for (; k < 7040; ++k)
+    {
+        source.push(engine);
+        clock.tick(k);
+    }
+    clock.release();
+    engine.stop();
+
+    auto const stats = engine.stats();
+    CHECK(stats.audioGaps == 1);
+    CHECK(stats.audioGapFrames == 960);
+    CHECK(stats.audio.underruns == 0);
+    auto const quiet = quietInside(outputs);
+    CHECK(quiet >= 900);
+    CHECK(quiet <= 1000);
+    CHECK(metrics.render().find("test_audio_gaps_total") == std::string::npos); // the app exports them
+}
+
+TEST_CASE("when the stream stops the queued audio is played out; a new stream is not cut")
+{
+    ManualClock clock(8000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    Engine engine(small(), clock, outputs, metrics);
+    engine.setPageState(PageState::Ready);
+    engine.audioStreamStarted();
+    engine.setAudioActive(true);
+    engine.start();
+    PacketSource source;
+    std::uint64_t k = 8001;
+    for (; k < 8011; ++k)
+    {
+        source.push(engine);
+        clock.tick(k);
+    }
+    auto const before = outputs.audio.size();
+    engine.setAudioActive(false, true); // CEF stopped the stream: about 60 ms are still queued
+    for (int i = 0; i < 5; ++i)
+    {
+        clock.tick(k++);
+    }
+    std::size_t loudTicks = 0;
+    for (std::size_t i = before; i < outputs.audio.size(); ++i)
+    {
+        loudTicks += std::fabs(outputs.audio[i].second[2 * 480]) > 0.25f ? 1 : 0;
+    }
+    CHECK(loudTicks >= 2);
+    CHECK(loudTicks <= 3);
+    CHECK(engine.stats().audio.underruns == 0);
+    // A new stream (pts far later): its first sample plays one target after it arrived.
+    source.pts += 5000;
+    engine.audioStreamStarted();
+    engine.setAudioActive(true);
+    auto const restart = outputs.audio.size();
+    for (int i = 0; i < 5; ++i)
+    {
+        source.push(engine);
+        clock.tick(k++);
+    }
+    clock.release();
+    engine.stop();
+    CHECK(std::fabs(outputs.audio[restart + 1].second[2 * 959]) < 0.01f);
+    CHECK(std::fabs(outputs.audio[restart + 2].second[2 * 480]) > 0.25f);
+    CHECK(engine.stats().audio.underruns == 0);
+    CHECK(engine.stats().audio.realigned == 0);
+    CHECK(engine.stats().audioGaps == 0); // a new stream is a new timeline
 }

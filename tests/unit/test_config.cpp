@@ -101,6 +101,20 @@ TEST_CASE("frame-loop settings: pipeline, real-time threads, conversion threads,
     CHECK(errorKey({{"BROWSER_REALTIME", "maybe"}}) == "BROWSER_REALTIME");
 }
 
+TEST_CASE("frame clock: external by default, internal with a phase shorter than the period")
+{
+    auto const d = load({}, {}, "host").config;
+    CHECK((d.frameClock == FrameClockMode::External));
+    CHECK(d.frameClockPhaseMs == 0);
+    auto const c = load({{"BROWSER_FRAME_CLOCK", "internal"}, {"BROWSER_FRAME_CLOCK_PHASE_MS", "5"}}, {}, "host").config;
+    CHECK((c.frameClock == FrameClockMode::Internal));
+    CHECK(c.frameClockPhaseMs == 5);
+    CHECK(load({{"BROWSER_FORMAT", "1080p25"}, {"BROWSER_FRAME_CLOCK_PHASE_MS", "39"}}, {}, "host").config.frameClockPhaseMs == 39);
+    CHECK(errorKey({{"BROWSER_FRAME_CLOCK", "vsync"}}) == "BROWSER_FRAME_CLOCK");
+    CHECK(errorKey({{"BROWSER_FRAME_CLOCK_PHASE_MS", "20"}}) == "BROWSER_FRAME_CLOCK_PHASE_MS"); // 1080p50: 20 ms period
+    CHECK(errorKey({{"BROWSER_FRAME_CLOCK_PHASE_MS", "-1"}}) == "BROWSER_FRAME_CLOCK_PHASE_MS");
+}
+
 TEST_CASE("formats and secrets")
 {
     auto const f = parseFormat("1080p59.94");
