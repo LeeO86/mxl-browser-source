@@ -624,7 +624,7 @@ namespace mbs::app
         {
             if (method != "OPTIONS" && !authorized(req))
             {
-                error(res, 401, "token required");
+                ograf::unauthorized(*_ografApi, req, res);
                 return;
             }
             ograf::handleOgraf(*_ografApi, req, res);

@@ -24,6 +24,8 @@ namespace mbs::ograf
         std::vector<std::string> corsOrigins;
         /// "" when the renderer page runs, else why not (shown as WARNING; actions answer 409).
         std::function<std::string()> rendererProblem;
+        /// "" unless the renderer page failed to load or crashed (shown as ERROR).
+        std::function<std::string()> rendererError;
         util::Metrics* metrics = nullptr; // ograf_uploads_total
     };
 
@@ -34,4 +36,7 @@ namespace mbs::ograf
 
     /// Answers one request. Authorization is the caller's (the same token rule as /api/v1).
     void handleOgraf(ApiContext& ctx, ops::HttpRequest const& req, ops::HttpResponse& res);
+    /// The 401 for a request without the token: an ErrorResponse, with the CORS headers so that a
+    /// browser controller can read it.
+    void unauthorized(ApiContext const& ctx, ops::HttpRequest const& req, ops::HttpResponse& res);
 }

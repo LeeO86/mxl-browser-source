@@ -390,3 +390,173 @@ TEST_CASE("ograf: Server API routes")
     CHECK_FALSE(layers.anyLoaded());
     CHECK(call("GET", "/ograf/v1/graphics/my%20graphic").status == 404);
 }
+
+TEST_CASE("ograf: Server API shapes follow server-api.yaml")
+{
+    TempDir t;
+    Library lib((t.path / "lib").string(), RenderInfo{}, ZipLimits{});
+    lib.load();
+    REQUIRE(lib.addZip(makeZip(t.path, {{"g.ograf.json", manifest("g")}, {"graphic.mjs", kRuntime}}), {}).status == 200);
+    REQUIRE(lib.addZip(makeZip(t.path, {{"h.ograf.json", manifest("h")}, {"graphic.mjs", kRuntime}}), {}).status == 200);
+    FakeRenderer page;
+    LayerSet layers(page, lib, (t.path / "layers.json").string(), RenderInfo{});
+    std::string problemText;
+    std::string errorText;
+    ApiContext ctx{lib, layers, "Browser", "test", {"https://controller.example"}, [&] { return problemText; }, [&] { return errorText; }};
+    auto const call = [&](std::string const& method, std::string const& path, std::string const& body = "", std::string const& query = "") {
+        mbs::ops::HttpRequest req;
+        req.method = method;
+        req.path = path;
+        req.query = query;
+        req.body = body;
+        mbs::ops::HttpResponse res;
+        handleOgraf(ctx, req, res);
+        return res;
+    };
+    auto const isProblem = [](mbs::ops::HttpResponse const& res) {
+        auto const v = parse(res.body);
+        return v.get("status").is<double>() && static_cast<int>(v.get("status").get<double>()) == res.status && v.get("title").is<std::string>() &&
+               v.get("detail").is<std::string>();
+    };
+    std::string const T = "/ograf/v1/renderers/main/target/graphicInstance/";
+    auto const load = [&](int layer, std::string const& id) {
+        auto const res = call("POST", T + "load", R"({"renderTarget":{"layer":)" + std::to_string(layer) + R"(},"graphicId":")" + id + R"(","params":{"data":{}}})");
+        REQUIRE(res.status == 200);
+        return parse(res.body);
+    };
+
+    // GET / : name (required), version; also with the trailing slash a client adds to the base URL.
+    CHECK(parse(call("GET", "/ograf/v1/").body).get("name").to_str() == "Browser");
+
+    // GraphicListInfo: id and name.
+    auto const graphics = parse(call("GET", "/ograf/v1/graphics").body);
+    for (auto const& g : graphics.get("graphics").get<picojson::array>())
+    {
+        CHECK(g.get("id").is<std::string>());
+        CHECK(g.get("name").is<std::string>());
+    }
+    // GET /graphics/{id}: graphic (the manifest) and metadata.createdAt.
+    auto const info = parse(call("GET", "/ograf/v1/graphics/g").body);
+    CHECK(info.get("graphic").get("id").to_str() == "g");
+    CHECK(info.get("metadata").get("createdAt").is<std::string>());
+    CHECK(isProblem(call("GET", "/ograf/v1/graphics/nope")));
+    CHECK(isProblem(call("GET", "/ograf/v1/graphics/g/thumbnail")));
+
+    // Renderer list: id and name. RendererInfo: id, name, status, renderTargets, a shallow
+    // renderTargetSchema with a default target, customActions.
+    auto const list = parse(call("GET", "/ograf/v1/renderers").body).get("renderers").get<picojson::array>();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].get("id").to_str() == "main");
+    CHECK(list[0].get("name").to_str() == "Browser");
+    auto const r = parse(call("GET", "/ograf/v1/renderers/main").body).get("renderer");
+    CHECK(r.get("status").get("status").to_str() == "OK");
+    CHECK(r.get("customActions").get<picojson::array>().empty());
+    auto const& schema = r.get("renderTargetSchema");
+    CHECK(schema.get("type").to_str() == "object");
+    CHECK(schema.get("properties").get("layer").get("type").to_str() == "integer");
+    CHECK(schema.get("default").serialize() == R"({"layer":1})");
+    auto const targets = r.get("renderTargets").get<picojson::array>();
+    REQUIRE(targets.size() == 8);
+    CHECK(targets[0].get("renderTarget").serialize() == R"({"layer":1})");
+    CHECK(targets[0].get("name").to_str() == "Layer 1");
+    CHECK(targets[0].get("graphicInstances").get<picojson::array>().empty());
+    CHECK(isProblem(call("GET", "/ograf/v1/renderers/other")));
+
+    // Status: WARNING while the renderer cannot take actions, ERROR when the page failed.
+    problemText = "loading";
+    CHECK(parse(call("GET", "/ograf/v1/renderers/main").body).get("renderer").get("status").get("status").to_str() == "WARNING");
+    errorText = "crashed";
+    auto const failed = parse(call("GET", "/ograf/v1/renderers/main").body).get("renderer").get("status");
+    CHECK(failed.get("status").to_str() == "ERROR");
+    CHECK(failed.get("message").to_str() == "crashed");
+    problemText.clear();
+    errorText.clear();
+
+    // Load: graphicInstanceId and statusCode; the renderTarget is a JSON object, not a string.
+    auto const a = load(1, "g");
+    CHECK(a.get("graphicInstanceId").is<std::string>());
+    CHECK(a.get("statusCode").get<double>() == 200);
+    CHECK(call("POST", T + "load", R"({"renderTarget":"{\"layer\":1}","graphicId":"g","params":{"data":{}}})").status == 404);
+    CHECK(isProblem(call("POST", T + "load", R"({"renderTarget":{"layer":1},"graphicId":"nope","params":{"data":{}}})")));
+    CHECK(call("POST", T + "load", R"({"renderTarget":{"layer":1},"params":{"data":{}}})").status == 400);
+    auto const instance = a.get("graphicInstanceId").to_str();
+
+    // GET target: renderTarget is a JSON-stringified RenderTargetIdentifier in the query.
+    auto const ti = call("GET", "/ograf/v1/renderers/main/target", "", "renderTarget=%7B%22layer%22%3A1%7D");
+    REQUIRE(ti.status == 200);
+    auto const gi = parse(ti.body).get("graphicInstances").get<picojson::array>();
+    REQUIRE(gi.size() == 1);
+    CHECK(gi[0].get("graphicInstanceId").to_str() == instance);
+    CHECK(gi[0].get("graphic").get("id").to_str() == "g");
+    CHECK(gi[0].get("graphic").get("name").is<std::string>());
+    CHECK(call("GET", "/ograf/v1/renderers/main/target").status == 404);
+    CHECK(call("GET", "/ograf/v1/renderers/main/target", "", "renderTarget=%7B%22layer%22%3A9%7D").status == 404);
+    CHECK(call("GET", "/ograf/v1/renderers/main/target", "", "renderTarget=1").status == 404);
+
+    // Actions: graphicInstanceId, statusCode, statusMessage and currentStep from the graphic.
+    picojson::object played;
+    played["statusCode"] = picojson::value(200.0);
+    played["statusMessage"] = picojson::value("Playing");
+    played["currentStep"] = picojson::value(0.0);
+    page.answers.push_back({CallResult::Kind::Ok, picojson::value(played), {}});
+    auto const play = parse(call("POST", T + "playAction", R"({"renderTarget":{"layer":1},"graphicInstanceId":")" + instance + R"(","params":{"delta":1}})").body);
+    CHECK(play.get("graphicInstanceId").to_str() == instance);
+    CHECK(play.get("statusCode").get<double>() == 200);
+    CHECK(play.get("statusMessage").to_str() == "Playing");
+    CHECK(play.get("currentStep").get<double>() == 0);
+    CHECK(page.args.back().serialize() == R"({"delta":1})");
+    auto const update = call("POST", T + "updateAction", R"({"renderTarget":{"layer":1},"graphicInstanceId":")" + instance + R"(","params":{"data":{"x":1},"skipAnimation":true}})");
+    CHECK(update.status == 200);
+    CHECK(page.args.back().get("skipAnimation").get<bool>());
+    // A custom action gets {id, payload, skipAnimation} (the graphic's customAction() argument).
+    CHECK(call("POST", T + "customActions/highlight", R"({"renderTarget":{"layer":1},"graphicInstanceId":")" + instance + R"(","params":{"payload":{"on":true}}})").status == 200);
+    CHECK(page.args.back().get("id").to_str() == "highlight");
+    CHECK(page.args.back().get("payload").serialize() == R"({"on":true})");
+    // The wrong instance or an empty layer: 404; a missing instance id: 400.
+    CHECK(isProblem(call("POST", T + "stopAction", R"({"renderTarget":{"layer":1},"graphicInstanceId":"other","params":{}})")));
+    CHECK(call("POST", T + "stopAction", R"({"renderTarget":{"layer":2},"graphicInstanceId":")" + instance + R"(","params":{}})").status == 404);
+    CHECK(call("POST", T + "stopAction", R"({"renderTarget":{"layer":1},"params":{}})").status == 400);
+    // The graphic throws: 550, timeout: 504; both ErrorResponses.
+    page.answers.push_back({CallResult::Kind::Threw, {}, "boom"});
+    auto const threw = call("POST", T + "stopAction", R"({"renderTarget":{"layer":1},"graphicInstanceId":")" + instance + R"(","params":{}})");
+    CHECK(threw.status == 550);
+    CHECK(isProblem(threw));
+    page.answers.push_back({CallResult::Kind::Timeout, {}, ""});
+    CHECK(call("POST", T + "stopAction", R"({"renderTarget":{"layer":1},"graphicInstanceId":")" + instance + R"(","params":{}})").status == 504);
+    // Renderer custom actions: there are none.
+    CHECK(isProblem(call("POST", "/ograf/v1/renderers/main/customActions/x", R"({"payload":{}})")));
+
+    // Clear: the filters (each matches with all its parts; any filter clears).
+    load(2, "h");
+    load(3, "h");
+    auto const clear = [&](std::string const& body) { return parse(call("PUT", T + "clear", body).body).get("graphicInstances").get<picojson::array>(); };
+    CHECK(clear(R"({"filters":[{"graphicId":7}]})").empty()); // a wrong type matches nothing
+    CHECK(clear(R"({"filters":[{"renderTarget":{"layer":9}}]})").empty());
+    CHECK(clear(R"({"filters":[{"renderTarget":{"layer":1},"graphicId":"h"}]})").empty());
+    auto const c1 = clear(R"({"filters":[{"graphicInstanceId":")" + instance + R"("}]})");
+    REQUIRE(c1.size() == 1);
+    CHECK(c1[0].get("renderTarget").serialize() == R"({"layer":1})");
+    CHECK(c1[0].get("graphicInstanceId").to_str() == instance);
+    load(1, "g");
+    CHECK(clear(R"({"filters":[{"graphicId":"h","renderTarget":{"layer":2}},{"graphicId":"g"}]})").size() == 2);
+    load(1, "g");
+    CHECK(clear(R"({"filters":[]})").size() == 2); // no filters: everything
+    CHECK_FALSE(layers.anyLoaded());
+    CHECK(call("POST", T + "clear", R"({"filters":[]})").status == 405);
+
+    // Without the token: a 401 ErrorResponse that a listed browser origin can read.
+    mbs::ops::HttpRequest req;
+    req.method = "GET";
+    req.path = "/ograf/v1/graphics";
+    req.headers.emplace_back("Origin", "https://controller.example");
+    mbs::ops::HttpResponse res;
+    unauthorized(ctx, req, res);
+    CHECK(res.status == 401);
+    CHECK(isProblem(res));
+    bool allowed = false;
+    for (auto const& [k, v] : res.headers)
+    {
+        allowed = allowed || (k == "Access-Control-Allow-Origin" && v == "https://controller.example");
+    }
+    CHECK(allowed);
+}
