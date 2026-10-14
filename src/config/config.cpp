@@ -64,7 +64,7 @@ namespace mbs::config
                 {"BROWSER_VIDEO_DELAY_GRAINS", "auto", true, false, "Video delay in grains for A/V alignment (auto or 0-10)"},
                 {"BROWSER_FRAME_LEAD", "1", true, false, "Video latency in periods assumed by BROWSER_VIDEO_DELAY_GRAINS=auto (1-2)"},
                 {"BROWSER_RENDER", "auto", true, false, "auto, gpu, software"},
-                {"BROWSER_FRAME_PIPELINE", "0", true, false, "1: each paint has two periods instead of one to reach its grain (one period more latency)"},
+                {"BROWSER_FRAME_PIPELINE", "1", true, false, "1: each paint has two periods instead of one to reach its grain (one period more latency)"},
                 {"BROWSER_REALTIME", "true", true, false, "Tick and converter threads SCHED_FIFO when CAP_SYS_NICE is granted"},
                 {"BROWSER_CONVERT_THREADS", "4", true, false, "Threads converting one frame in bands of rows (1-16)"},
                 {"BROWSER_ON_PAGE_ERROR", "hold", false, false, "hold, transparent, black, slate"},

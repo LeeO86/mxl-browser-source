@@ -83,7 +83,7 @@ namespace mbs::engine
         std::uint32_t audioChannels = 2;  // 0: no audio flow
         std::uint32_t audioTargetFrames = 2880; // FIFO target (60 ms)
         std::uint32_t videoDelayGrains = 0;
-        std::uint32_t pipelineGrains = 0; // 1: a paint is committed one tick later than it could be, so it has two periods (BROWSER_FRAME_PIPELINE)
+        std::uint32_t pipelineGrains = 0; // 1: up to two converted frames wait and the oldest is committed, so a late paint is shown one tick later instead of dropped (BROWSER_FRAME_PIPELINE)
         std::uint64_t marginNs = 1'000'000; // wake this long after the grain start (ε)
         Substitute onPageError = Substitute::Hold;
         std::uint32_t previewWidth = 960; // 0: no preview
@@ -141,10 +141,13 @@ namespace mbs::engine
 
         /// UI thread (OnPaint): copies the paint; the converter takes it.
         void paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height);
-        /// Tick thread: a BeginFrame was posted to the UI thread (paint latency is measured from here).
-        void beginFrameSent();
-        /// UI thread: the posted BeginFrame reached CEF (SendExternalBeginFrame).
-        void beginFrameDispatched();
+        /// Tick thread: a BeginFrame was posted to the UI thread. Returns its time (TAI ns), the
+        /// BeginFrame's id for beginFrameDispatched().
+        std::uint64_t beginFrameSent();
+        /// UI thread: the BeginFrame posted at `postedNs` reaches CEF now (SendExternalBeginFrame).
+        /// A paint belongs to the newest BeginFrame dispatched before it: both run on the UI thread,
+        /// so a paint that arrives while a newer BeginFrame waits in the queue is not counted as its.
+        void beginFrameDispatched(std::uint64_t postedNs);
         void setPageState(PageState state);
         [[nodiscard]] PageState pageState() const { return _pageState.load(); }
 
@@ -210,8 +213,6 @@ namespace mbs::engine
         GrainBuffers _black;
         mutable std::mutex _setsMutex;
         std::vector<int> _pending;                 // capacity reserved: no allocation per frame
-        std::uint64_t _postedAt[4] = {0, 0, 0, 0}; // BeginFrame posted at tick index % 4 (tick thread)
-        std::uint64_t _tickIndex = 0;              // the grain index of the newest commit (tick thread)
         int _current = kTransparent;
         std::vector<int> _ring;
 
@@ -231,7 +232,8 @@ namespace mbs::engine
 
         // When the newest BeginFrame was sent (TAI ns), for the paint latency.
         std::atomic<std::uint64_t> _lastBeginFrameNs{0};
-        std::uint64_t _paints = 0; // UI thread: paints accepted by the store (its sequence)
+        std::uint64_t _paints = 0;       // UI thread: paints accepted by the store (its sequence)
+        std::atomic<std::uint64_t> _dispatchedNs{0}; // the posted time of the newest BeginFrame sent (UI thread)
 
         // Audio, on the tick thread (the FIFO's producer is CEF's audio thread).
         std::unique_ptr<audio::Fifo> _fifo;

@@ -517,8 +517,8 @@ namespace mbs::app
         _engine->setRequestFrame([this] {
             if (_browserReady.load())
             {
-                _engine->beginFrameSent();
-                _browser->beginFrame([this] { _engine->beginFrameDispatched(); });
+                auto const posted = _engine->beginFrameSent();
+                _browser->beginFrame([this, posted] { _engine->beginFrameDispatched(posted); });
             }
         });
         _engine->setAudioActive(false);

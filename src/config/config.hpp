@@ -106,7 +106,7 @@ namespace mbs::config
         int videoDelayGrains = -1; // -1 = auto
         int frameLead = 1;
         bool realtime = true;
-        int framePipeline = 0;
+        int framePipeline = 1;
         int convertThreads = 4;
         Render render = Render::Auto;
         PageErrorMode onPageError = PageErrorMode::Hold;

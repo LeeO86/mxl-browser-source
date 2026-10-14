@@ -151,7 +151,7 @@ namespace mbs::engine
     void Engine::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
     {
         auto const now = _clock.nowNs();
-        auto const sent = _lastBeginFrameNs.load();
+        auto const sent = _dispatchedNs.load();
         if (!_store.paint(bgra, stride, width, height, FrameStore::Stamp{sent, now, 0}))
         {
             std::lock_guard lock{_statsMutex};
@@ -161,8 +161,8 @@ namespace mbs::engine
         auto const stored = _clock.nowNs();
         _metrics.observe("paint_copy_seconds", {}, static_cast<double>(stored - now) / 1e9);
         record(TraceKind::Paint, stored, ++_paints, now); // the store's sequence: both count accepted paints
-        // A paint carries no frame id, and a BeginFrame on an unchanged page gets no paint, so a
-        // paint cannot be paired with "its" BeginFrame: the latency is taken from the newest one.
+        // A paint carries no frame id, and a BeginFrame on an unchanged page gets no paint: the
+        // latency is taken from the newest BeginFrame dispatched before the paint (same thread).
         // Paints that came too late show up as paints never committed (stats().latePaints).
         if (sent != 0 && now >= sent)
         {
@@ -175,21 +175,23 @@ namespace mbs::engine
         _wake.notify_one();
     }
 
-    void Engine::beginFrameSent()
+    std::uint64_t Engine::beginFrameSent()
     {
         auto const now = _clock.nowNs();
         _lastBeginFrameNs.store(now);
         record(TraceKind::BeginFramePosted, now);
+        return now;
     }
 
-    void Engine::beginFrameDispatched()
+    void Engine::beginFrameDispatched(std::uint64_t postedNs)
     {
         auto const now = _clock.nowNs();
-        if (auto const posted = _lastBeginFrameNs.load(); posted != 0 && now >= posted)
+        if (postedNs != 0 && now >= postedNs)
         {
-            _metrics.observe("begin_frame_dispatch_seconds", {}, static_cast<double>(now - posted) / 1e9);
+            _metrics.observe("begin_frame_dispatch_seconds", {}, static_cast<double>(now - postedNs) / 1e9);
         }
-        record(TraceKind::BeginFrameSent, now);
+        _dispatchedNs.store(postedNs);
+        record(TraceKind::BeginFrameSent, now, 0, postedNs);
     }
 
     void Engine::record(TraceKind kind, std::uint64_t ns, std::uint64_t a, std::uint64_t b)
@@ -380,7 +382,7 @@ namespace mbs::engine
                     _poolBeginFrame[static_cast<std::size_t>(id)] = frame.stamp.beginFrameNs;
                     if (_pending.size() > _settings.pipelineGrains)
                     {
-                        _pending.erase(_pending.begin()); // the oldest waiting frame is never shown
+                        _pending.erase(_pending.begin()); // the oldest waiting frame is never shown (late)
                         replaced = true;
                     }
                     _pending.push_back(id);
@@ -450,32 +452,17 @@ namespace mbs::engine
         bool fresh = false;
         int out = kNone;
         std::uint64_t beginFrameNs = 0;
-        std::uint64_t unused = 0;
         {
             std::lock_guard lock{_setsMutex};
-            _tickIndex = index;
             if (state == PageState::Ready && !_pending.empty())
             {
-                // Without the pipeline the newest converted frame is due. With it, only frames
-                // painted for a BeginFrame posted at tick index-2 or earlier: the frame of the
-                // BeginFrame posted at the previous tick waits one more period.
-                std::uint64_t const cutoff = _settings.pipelineGrains == 0 || index < 2 ? ~std::uint64_t{0} : _postedAt[(index - 2) % 4];
-                int take = -1;
-                for (int i = 0; i < static_cast<int>(_pending.size()); ++i)
-                {
-                    if (_poolBeginFrame[static_cast<std::size_t>(_pending[static_cast<std::size_t>(i)])] <= cutoff)
-                    {
-                        take = i;
-                    }
-                }
-                if (take >= 0)
-                {
-                    _current = _pending[static_cast<std::size_t>(take)];
-                    _pending.erase(_pending.begin(), _pending.begin() + take + 1);
-                    fresh = true;
-                    beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
-                    unused = static_cast<std::uint64_t>(take);
-                }
+                // The oldest converted frame (SPEC §2.4). Without the pipeline at most one waits,
+                // the newest. With it up to two wait: a paint that missed its tick is shown at the
+                // next one instead of being replaced, and the frame behind it waits one period.
+                _current = _pending.front();
+                _pending.erase(_pending.begin());
+                fresh = true;
+                beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
             }
             else if (_settings.onPageError == Substitute::Transparent)
             {
@@ -503,11 +490,6 @@ namespace mbs::engine
         auto const start = _clock.indexNs(index);
         _metrics.observe("commit_lateness_seconds", {}, now > start ? static_cast<double>(now - start) / 1e9 : 0.0);
         record(TraceKind::Commit, now, index, fresh ? std::max<std::uint64_t>(1, beginFrameNs) : 0);
-        if (unused > 0)
-        {
-            std::lock_guard lock{_statsMutex};
-            _stats.convertedUnused += unused;
-        }
         return fresh;
     }
 
@@ -571,7 +553,5 @@ namespace mbs::engine
         {
             _requestFrame();
         }
-        std::lock_guard lock{_setsMutex};
-        _postedAt[_tickIndex % 4] = _lastBeginFrameNs.load();
     }
 }

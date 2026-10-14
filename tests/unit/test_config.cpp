@@ -84,6 +84,23 @@ TEST_CASE("WebAuthn is hidden from pages unless enabled")
     CHECK(errorKey({{"BROWSER_WEBAUTHN", "maybe"}}) == "BROWSER_WEBAUTHN");
 }
 
+TEST_CASE("frame-loop settings: pipeline, real-time threads, conversion threads, WebGPU")
+{
+    auto const d = load({}, {}, "host").config;
+    CHECK(d.framePipeline == 1);
+    CHECK(d.realtime);
+    CHECK(d.convertThreads == 4);
+    CHECK_FALSE(d.webgpu);
+    auto const c = load({{"BROWSER_FRAME_PIPELINE", "0"}, {"BROWSER_REALTIME", "false"}, {"BROWSER_CONVERT_THREADS", "8"}, {"BROWSER_WEBGPU", "true"}}, {}, "host").config;
+    CHECK(c.framePipeline == 0);
+    CHECK_FALSE(c.realtime);
+    CHECK(c.convertThreads == 8);
+    CHECK(c.webgpu);
+    CHECK(errorKey({{"BROWSER_FRAME_PIPELINE", "2"}}) == "BROWSER_FRAME_PIPELINE");
+    CHECK(errorKey({{"BROWSER_CONVERT_THREADS", "0"}}) == "BROWSER_CONVERT_THREADS");
+    CHECK(errorKey({{"BROWSER_REALTIME", "maybe"}}) == "BROWSER_REALTIME");
+}
+
 TEST_CASE("formats and secrets")
 {
     auto const f = parseFormat("1080p59.94");
