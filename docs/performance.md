@@ -60,6 +60,28 @@ A late frame is one Chromium paints at its display deadline, 17–20 ms after th
 
 Raw data (lab host): `~/mxl-lab/ograf/m5/` (`baseline-1401`, `matrix-1430` (incl. pipeline v1), `matrix2-1509`, `smi-test`, `trace-1427`; `runs.jsonl` per directory, traces in `traces/`).
 
+## Memory after clearing the layers, 2026-10-14 (M5)
+
+The M4 soak ended with 1 023 MiB CEF RSS after all layers were cleared, against 700 MiB after the start. To tell a per-layer leak from a cache, the same 15-minute run of `ograf_soak.py` (8 layers, the EBU loop, about 7 actions/s, 0 failures) ran on the old image (layers cleared by navigating the iframe to `about:blank`) and on M5 (a clear replaces the iframe element), then all layers were cleared and the processes read after 1 and 5 minutes (`ps` RSS in the container, shared pages counted per process):
+
+| | Idle after start | 1 min after clear, old / M5 | 5 min after clear, old / M5 |
+| --- | --- | --- | --- |
+| CEF RSS (`cef_processes_resident_bytes`) | 699 / 698 MiB | 976 / 968 MiB | 976 / 968 MiB |
+| GPU process | 263 MiB | 419 / 419 MiB | 419 / 419 MiB |
+| Renderer (the renderer page and its 8 iframes) | 110 MiB | 228 / 221 MiB | 228 / 221 MiB |
+| Function process | 410 MiB | 424 / 422 MiB | 424 / 422 MiB |
+| Container (`docker stats`) | 430 MiB | 634 / 627 MiB | 634 / 626 MiB |
+
+- Replacing the iframes frees about 7 MiB in the renderer: the disposed documents, module maps and their GPU resources were already released when the frames were navigated away. The change stays (it costs nothing and makes the release explicit), but it is not the cause.
+- What stays after a clear is a high-water level, not a leak: the GPU process keeps about +155 MiB (texture and shared-image pools grown while the weather and lottie graphics loaded) and the renderer +115 MiB (V8 and PartitionAlloc keep freed pages for reuse); nothing is released in the following 5 minutes, and the level after 15 minutes (≈ 970 MiB) is the same as after the 2 h soak (1 023 MiB). It is reached within minutes of playing the heavier graphics and does not grow with the number of actions.
+- Whether the slow rise of the 2 h soak (≈ 25 MiB/h) flattens is the question for the 8 h soak below.
+
+Raw data: `~/mxl-lab/ograf/m5/mem-old/`, `mem-new/` (`memory.log`, `soak.csv`).
+
+## OGraf soak, 2026-10-14/15 (8 h, 8 layers, M5) — running
+
+Image `2f7c726` (M5 head, frame pipeline on, tick and converter `SCHED_FIFO` through `--ulimit rtprio=99`), otherwise the setup and load of the 2 h soak below (`ograf_soak.py`, 480 minutes). Started 18:34 CEST on 2026-10-14, the soak ends about 02:35 and the script clears all layers and reads the memory again 5 minutes later. Results to be filled in from `~/mxl-lab/ograf/soak-m5-20261014-1834/` (`soak.csv` one row per minute, `load.log` load average and grain counters per minute, `metrics-start/end/cleared.txt`, `ps-start/end/cleared.txt`, `container.log`). Questions: does the CEF RSS flatten (2 h: +25 MiB/h), are there 0 missed grains with real-time priority, how many held frames under actions, and no "stack smashing" with WebGPU off.
+
 ## OGraf soak, 2026-10-14 (2 h, 8 layers)
 
 **Setup.** Lab host with 2× Xeon Gold 6136 and an NVIDIA A16 (GPU 0 only), driver 595.84. Image built from `feat/ograf-m4` at `1a2466d` (1.3.0 candidate, version string still 1.2.0). 1080p50, `BROWSER_KEY_MODE=v210a`, `BROWSER_RENDER=gpu` (ANGLE on the A16), 2 audio channels, `--cpuset-cpus 2,4,…,16` (8 cores), `--shm-size 1g`, no `CAP_SYS_NICE` (the tick thread runs at normal priority, `tick_priority_normal`). Other lab work ran on the host at the same time, some of it unpinned (load average 7–33 on 48 CPUs).
