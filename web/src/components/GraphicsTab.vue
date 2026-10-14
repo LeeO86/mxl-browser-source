@@ -72,6 +72,25 @@ watch(
   { immediate: true },
 );
 
+// The layer rows label a graphic by its text fields in schema order: they need every loaded manifest.
+watch(
+  () => allLayers.value.map((l) => l.graphicId).join(","),
+  () => allLayers.value.forEach((l) => l.graphicId && loadManifest(l.graphicId)),
+  { immediate: true },
+);
+// The library's "on layer n" (v_inUse) changes with every load and clear.
+watch(
+  () => (live.ograf || []).map((l) => l.graphicInstanceId || "").join(","),
+  async (now, before) => {
+    if (props.widget || before === undefined) return;
+    try {
+      graphics.value = (await api.get("/ograf/v1/graphics"))?.graphics || graphics.value;
+    } catch {
+      /* the next action reports it */
+    }
+  },
+);
+
 const target = (n) => ({ layer: n });
 
 async function load() {
