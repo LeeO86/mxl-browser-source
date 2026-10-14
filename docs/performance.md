@@ -1,6 +1,64 @@
 # Performance
 
-Lab measurements of mxl-browser-source. The 1.0.0 numbers (one page, `counter.html`, latency) are in the README; this file starts with the OGraf soak of 1.3.0.
+Lab measurements of mxl-browser-source. The 1.0.0 numbers (one page, `counter.html`, latency) are in the README; this file starts with 1.3.0: the frame loop (M5) and the OGraf soaks.
+
+## Frame loop, 2026-10-14 (M5: held frames, missed grains)
+
+**Setup.** Same host and GPU as the soak below (2× Xeon Gold 6136, NVIDIA A16 GPU 0, driver 595.84), 1080p50, `BROWSER_KEY_MODE=v210a`, `BROWSER_RENDER=gpu`, `--cpuset-cpus 2,4,…,16`, `--shm-size 1g`, and `--ulimit rtprio=99` so the tick (and in 1.3.0 the converter) run `SCHED_FIFO` (checked with `ps -eLo cls,rtprio`; `--cap-add SYS_NICE` alone does nothing for the uid-1000 process, `CapEff` 0). The host was "quiet" in the sense of the lab: no other agent's work, but the permanent containers of other users (mxl-lab-player, -writers, -replay, -browser, -strom) used about 4 cores throughout (sum of their `docker stats`), load average 3–12 (median about 6), GPU 0 used only by this container. Every run records `uptime`, `docker stats` of every container and `nvidia-smi` before, during and after (`runs.jsonl` below).
+
+**Method.** `tests/integration/frameloop_bench.py`: the same continuously animated elements (GSAP timeline, CSS keyframes, GSAP tweens on an SVG, a GSAP-driven counter with a CSS ticker; GSAP 3.12.5 vendored) as one page (`templates/frameloop/index.html?n=N`) or as N OGraf layers of the lab graphic `tests/integration/ograf/anim` at the same places, and (`ebu`) the first N EBU examples of the M4 layer test. Every element changes on every frame, so every repeated grain is a held frame. 150–180 s per run after 15 s warm-up; the 10-minute target runs 600 s.
+
+**Baseline: is it OGraf?** No. Image `1a2466d` (1.3.0 candidate before M5), held frames (repeated grains) in % of grains:
+
+| Animated elements / layers | 2 | 4 | 8 |
+| --- | --- | --- | --- |
+| Page mode, one page | 1.45 % | 0.95 % | 1.00 % |
+| OGraf, one layer each (same elements) | 1.64 % | 0.91 % | 0.99 % |
+| OGraf, EBU examples (M4 order) | 1.04 % | 1.01 % | **33.6 %** |
+
+Page and OGraf behave the same with the same content: the late paints are the frame loop's, not the iframes'. With the heavier EBU set on 8 layers (lottie, weather images, renderer-test) the old loop collapses: once paints are late they stay late and each replaces the next (2 526 late paints in 7 607 grains).
+
+**Where the time goes** (trace `GET /api/v1/debug/frame-trace`, `tests/tools/frame_trace.py`, page mode, 8 elements, 1 756 grains, no pipeline; OGraf with 8 layers gives the same within 0.5 ms):
+
+| Stage | All frames, mean / p95 | Frames that missed their tick (132), mean / p95 |
+| --- | --- | --- |
+| BeginFrame posted by the tick → sent on the UI thread | 0.11 / 0.08 ms | 0.59 / 2.29 ms |
+| sent → `OnPaint` (Chromium: main thread, raster, display, GPU readback) | 7.56 / 17.53 ms | **17.91 / 19.75 ms** |
+| `OnPaint` copy (8.3 MB, UI thread) | 2.26 / 2.95 ms | 2.74 / 4.19 ms |
+| waiting for the converter (the previous conversion) | 0.02 / 0.03 ms | 0.02 / 0.03 ms |
+| conversion BGRA → v210 + v210a (4 threads) | 1.74 / 2.80 ms | 2.25 / 3.72 ms |
+| BeginFrame posted → frame ready | 11.6 / 22.8 ms | **23.5 / 26.6 ms** |
+| next tick − ready (slack) | +6.3 ms | −5.5 ms (p95 −2.7) |
+
+A late frame is one Chromium paints at its display deadline, 17–20 ms after the BeginFrame (about 7.5 % of frames); with the copy and the conversion it is ready 3–8 ms after the tick that wanted it. The GPU readback is inside Chromium's part and not visible separately; the function's own share is the copy and the conversion (≈ 4–5 ms). The tick's commit is 2 ms after T(k) (`commit_lateness_seconds`), unchanged. Without the pipeline only the newest paint is kept, so a late frame repeats the previous one for a grain and is then replaced by the next paint (held + skipped). The old `paint_latency_seconds` hid this: it measured from the newest BeginFrame *posted*, so a paint arriving while the next BeginFrame waited in the UI queue counted as 0–2 ms.
+
+**Each candidate fix, measured on its own** (held frames in % of grains):
+
+| Change (image) | Page 2 / 4 / 8 | OGraf 2 / 4 / 8 | EBU 2 / 4 / 8 | CPU (8) |
+| --- | --- | --- | --- | --- |
+| Baseline (1a2466d, tick `SCHED_FIFO`) | 1.45 / 0.95 / 1.00 | 1.64 / 0.91 / 0.99 | 1.04 / 1.01 / 33.6 | 0.97 / 1.05 cores |
+| Converter `SCHED_FIFO` 9 + WebGPU off (m5b) | 1.67 / 0.92 / 0.93 | 1.46 / 0.89 / 0.93 | – | 0.97 / 1.02 |
+| 8 conversion threads instead of 4 (m5d, no pipeline) | – / – / 0.99 | – / – / 0.97 | – | 1.05 / 1.08 |
+| Chromium flags `--disable-gpu-vsync --disable-frame-rate-limit --num-raster-threads=4 --disable-features=PaintHolding,ThrottleDisplayNoneAndVisibilityHiddenCrossOriginIframes` (m5d, no pipeline) | – / – / 0.05 | – / – / 1.41 | – | **3.25 / 2.29** |
+| Pipeline v1: a paint waits for the second tick after its BeginFrame (tags) | 3.00 / 4.69 / 5.50 | – | – | 1.01 |
+| **Pipeline (jitter buffer, `BROWSER_FRAME_PIPELINE=1`, m5d)** | **0.10 / 0 / 0.07** | **0 / 0 / 0** | **0 / 0.07 / 0** | 1.04 / 1.04 / 1.44 |
+
+- Real-time converter: no change (the converter never waited; it is kept because it costs nothing and protects against host load).
+- More conversion threads: −0.2 ms conversion, no change in held frames (the conversion is not the long part).
+- Flags: `--disable-frame-rate-limit` lets Chromium render free-running between BeginFrames; page mode looked good, but at 3.3 cores instead of 1, and OGraf got worse. Not adopted. GPU rasterisation and threaded compositing were already on.
+- Pipeline v1 made it worse: Chromium does not answer every BeginFrame with exactly one paint (some paints come before the next BeginFrame is dispatched, a second paint for the same BeginFrame, and the next BeginFrame then gets none), so a schedule by BeginFrame waits for paints that never come.
+- The adopted pipeline keeps up to two converted frames and commits the oldest, so a late frame is shown one tick later instead of being replaced. Replayed offline on the recorded traces first (held 15–29 → 0–1 per 1 750 ticks), then measured. Latency: one period more while a frame waits; the buffer held one frame 72–82 % of the time in the replays, never more than two.
+- WebGPU off (`BROWSER_WEBGPU=false`): `navigator.gpu.requestAdapter()` answers `null` without starting Dawn. The GPU process still logs one `vkCreateInstance() failed: -9` at start (Chromium enables WebGPU-on-Vulkan via GL interop before features are read; only `--ignore-gpu-blocklist`, which GPU mode needs, keeps it on). No "stack smashing" in the container logs kept from the M5 runs; the 8 h soak below checks the whole run.
+
+**Targets** (1080p50, rtprio, pipeline on, image m5d, 600 s each = 30 107 grains):
+
+| Target | Result |
+| --- | --- |
+| 0 held frames in 10 min with up to 4 layers animating | **Not quite: 40 (0.13 %)** with 4 OGraf layers. Every one of them is a BeginFrame Chromium answered with no paint at all (30 067 paints for 30 107 BeginFrames, 0 late paints); there is no frame to show, so no buffering on the function's side can fill it. Polling `nvidia-smi` every second during a 120 s run raised them from 14 to 24, so GPU-driver queries (the host's Prometheus exporter scrapes every 15 s) explain part, not all. What is achievable on the A16: 0 late paints; 0.0–0.2 % of BeginFrames unanswered by Chromium. |
+| ≤ 1 % with 8 | **Met:** OGraf 8 layers 0.07 % (22), EBU examples on 8 layers 0.01 % (4); 150 s runs 0–0.07 %. |
+| 0 missed grains | **Met in every M5 run** (352 567 measured grains with the tick `SCHED_FIFO`, 0 missed); 8 h soak below. |
+
+Raw data (lab host): `~/mxl-lab/ograf/m5/` (`baseline-1401`, `matrix-1430` (incl. pipeline v1), `matrix2-1509`, `smi-test`, `trace-1427`; `runs.jsonl` per directory, traces in `traces/`).
 
 ## OGraf soak, 2026-10-14 (2 h, 8 layers)
 
