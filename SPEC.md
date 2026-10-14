@@ -90,13 +90,13 @@ flowchart LR
 | --- | --- | --- |
 | main = CEF UI thread | `CefRunMessageLoop`; all `CefBrowserHost` calls (BeginFrame, input, navigation, zoom); CEF handlers (`OnPaint`, load, dialogs, popups) | block on MXL, disk or the network |
 | tick (TAI) | sleeps to each grain index, commits grain k, posts the BeginFrame for k+1 to the UI thread, writes audio samples, watchdog | wait for CEF; it only takes what is ready |
-| converter | BGRA copy → v210 fill, key plane or key flow, preview downscale | allocate per frame |
+| converter | BGRA copy → v210 fill, key plane or key flow, preview downscale; `BROWSER_CONVERT_THREADS` bands of rows on a pool | allocate per frame |
 | audio (CEF's) | `OnAudioStreamPacket` → lock-free FIFO | resample or touch MXL |
 | preview | JPEG of the downscaled frame at `BROWSER_PREVIEW_FPS` | run when no client watches |
 | HTTP/WebSocket | UI, REST, interaction, events, DevTools proxy | call CEF directly (it posts tasks to the UI thread) |
 | nmos-cpp | node, registration, IS-05 | – |
 
-`OnPaint` copies the buffer (it is valid only during the call) into one of three BGRA buffers and returns. Only the newest complete paint is kept. Locks are never held across a CEF call, an MXL call or I/O. The tick thread runs `SCHED_FIFO` when `CAP_SYS_NICE` is granted, otherwise at normal priority with a one-time warning (as Strom does).
+`OnPaint` copies the buffer (it is valid only during the call) into one of three BGRA buffers and returns. Only the newest complete paint is kept. Locks are never held across a CEF call, an MXL call or I/O. The tick thread runs `SCHED_FIFO` (priority 10) when the process may, otherwise at normal priority with a one-time warning (as Strom does); the converter and its pool run `SCHED_FIFO` 9, below the tick (1.3.0; `BROWSER_REALTIME=false` keeps both at normal priority). The process runs as uid 1000, so `--cap-add SYS_NICE` alone gives it nothing (the capability is not effective for a non-root user, `CapEff` 0 on the lab); what works is `RLIMIT_RTPRIO` ≥ 10: `--ulimit rtprio=10` with Docker, `ulimits: {rtprio: 10}` in Compose; in Kubernetes the container runtime's default rlimits (for example containerd's `default_runtime` ulimits or a CRI-O `default_ulimits = ["rtprio=10:10"]`). Recommended for every deployment; the warning `tick_priority_normal` says when it is missing.
 
 ### 2.3 Process model and instances
 
@@ -112,7 +112,7 @@ Definitions: P is the grain period of the format, T(k) the TAI start of grain in
 The tick thread runs once per index:
 
 1. Sleep until T(k) + ε.
-2. **Commit grain k.** If a paint arrived since the previous tick, the converter has produced its grain buffers; copy them into MXL grain k (`mxlFlowWriterOpenGrain`, all slices valid, `CommitGrain`) for the video flow, and the key flow in `fill_key`. If no paint arrived, commit the last converted frame again and count it: `repeated_grains_total{reason="late"}` for a ready page (unchanged or late), `{reason="hold"}` while the page is loading, crashed or hung (§13).
+2. **Commit grain k.** If a converted frame waits (the frame pipeline below), copy the oldest into MXL grain k (`mxlFlowWriterOpenGrain`, all slices valid, `CommitGrain`) for the video flow, and the key flow in `fill_key`. If no paint arrived, commit the last converted frame again and count it: `repeated_grains_total{reason="late"}` for a ready page (unchanged or late), `{reason="hold"}` while the page is loading, crashed or hung (§13).
 3. **Write audio** samples for the interval of grain k (§6).
 4. **Request the next frame:** post one `SendExternalBeginFrame()` to the UI thread, on every tick (none while the renderer is gone).
 5. If the thread woke after T(k+1), the indexes in between are committed as repeats and counted as `missed_grains_total` (the writer never leaves a gap in the ring).
@@ -122,8 +122,9 @@ Spike S2 (IMPLEMENTATION_PLAN.md §2) settled the BeginFrame semantics of CEF 14
 Consequences:
 
 - Exactly one BeginFrame per grain index. The page's `requestAnimationFrame` runs once per BeginFrame (spike S2: 1225 callbacks for about 1250 BeginFrames), so its timestamps and CSS animations advance in steps of P: animations are frame-locked to house time.
-- Latency from the page state to MXL is one period (BeginFrame at about T(k−1), grain at T(k)) plus the conversion, plus the video delay of §6.
-- **Late paint:** a paint that arrives after the tick of its grain is used at the next tick; the grain in between repeats the previous frame. Only the newest paint is kept, so a late page recovers on the next frame. A paint more than one period after its BeginFrame counts in `late_paints_total` (`paint_latency_seconds` has the distribution).
+- Latency from the page state to MXL is one period (BeginFrame at about T(k−1), grain at T(k)) plus the conversion, plus one period while the frame pipeline holds a frame, plus the video delay of §6.
+- **Frame pipeline (1.3.0, `BROWSER_FRAME_PIPELINE`, default 1).** Up to two converted frames wait and each tick commits the oldest. A paint that misses its tick (Chromium paints a busy page at its display deadline, 17–20 ms after the BeginFrame; with the copy and the conversion it is ready 23–28 ms after it) is shown at the next tick instead of being replaced by the following paint, and the frame behind it waits one period. The latency is one period more while a frame waits (most of the time once a page has been late once), never more than two; the automatic video delay counts one. Lab (docs/performance.md): held frames with 2–8 animated layers from about 1 % to 0. With `BROWSER_FRAME_PIPELINE=0` (1.2.0) only the newest paint is kept: a late paint repeats the previous frame for one grain and is then replaced (a held frame and a skipped one).
+- **Late paint:** a converted frame that is replaced before a tick takes it counts in `late_paints_total` (with the pipeline only when a third frame arrives before the tick). A paint belongs to the newest BeginFrame the UI thread dispatched before it (both run on that thread); `paint_latency_seconds` measures from that BeginFrame's post, and the trace `GET /api/v1/debug/frame-trace` (§10.3) has every step per grain: BeginFrame posted and sent, `OnPaint` and its copy, conversion start and end, commit.
 - `windowless_frame_rate` is set to the format's rate (rounded up); with `external_begin_frame_enabled` it only caps internal scheduling.
 - 59.94/29.97 use the MXL rational rate; index arithmetic is MXL's (128-bit rounding as in the multiviewer).
 
@@ -467,6 +468,7 @@ The UI MUST work inside an iframe (no `X-Frame-Options: DENY`): the platform's p
 | POST | `/api/v1/template/{verb}` | §4.4 |
 | GET | `/api/v1/templates` | local template files |
 | GET | `/api/v1/console` | last 200 console messages |
+| GET | `/api/v1/debug/frame-trace` | the frame loop's newest events (about 40 s at 50 Hz), §2.4 |
 | GET | `/api/v1/preview.jpg` | §7.3 |
 | GET | `/api/v1/nmos` | node, device, flow and sender ids, enable states |
 | GET, PUT | `/api/v1/config` | settings (§11); `null` removes a key from the file |
@@ -584,7 +586,10 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_AUDIO_BUFFER_MS` | 60 | yes | FIFO target |
 | `BROWSER_AV_OFFSET_MS` | 0 | no | audio trim, positive delays audio |
 | `BROWSER_VIDEO_DELAY_GRAINS` | `auto` | yes | §6 |
-| `BROWSER_FRAME_LEAD` | 1 | yes | video latency in periods that `BROWSER_VIDEO_DELAY_GRAINS=auto` assumes (1–2); a paint is always committed at the first tick after it arrives |
+| `BROWSER_FRAME_LEAD` | 1 | yes | video latency in periods that `BROWSER_VIDEO_DELAY_GRAINS=auto` assumes (1–2), before the frame pipeline's period |
+| `BROWSER_FRAME_PIPELINE` | 1 | yes | 1: up to two converted frames wait and the oldest is committed, so a late paint is shown one tick later instead of held (one period more latency, counted by `BROWSER_VIDEO_DELAY_GRAINS=auto`); 0: the newest paint only (1.2.0) (§2.4) |
+| `BROWSER_REALTIME` | `true` | yes | tick (`SCHED_FIFO` 10) and converter threads (9) real-time when `RLIMIT_RTPRIO` ≥ 10 (or an effective `CAP_SYS_NICE`) allows it (§2.2); `false`: normal priority |
+| `BROWSER_CONVERT_THREADS` | 4 | yes | threads converting one frame in bands of rows (1–16) |
 | `BROWSER_RENDER` | `auto` | yes | `auto`, `gpu`, `software` |
 | `BROWSER_ON_PAGE_ERROR` | `hold` | no | `hold`, `transparent`, `black`, `slate` |
 | `BROWSER_HANG_TIMEOUT_MS` | 3000 | no | the renderer does not answer a liveness probe for this long → hang (§13) |
@@ -598,7 +603,8 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_DEVTOOLS_PORT` | 9222 | yes | internal DevTools port (loopback) |
 | `BROWSER_API_TOKEN` | empty | yes | optional bearer token (secret) |
 | `BROWSER_PROFILE` | `ephemeral` | yes | `ephemeral` (cache in `/tmp`, cleared at start) or `persistent` (`<state>/profile`, cookies and logins survive) |
-| `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5). A `disable-blink-features` in `BROWSER_CHROMIUM_FLAGS_APPEND` replaces the function's: add `WebAuth` to it |
+| `BROWSER_WEBGPU` | `false` | yes | `true` offers WebGPU (Dawn on Vulkan) to pages; `false` adds `disable-features=WebGPUService,WebGPUBlobCache`, so `navigator.gpu.requestAdapter()` answers null without starting Dawn (the image has no Vulkan driver; a Dawn probe crashed a helper in the M4 soak) |
+| `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5) |
 | `BROWSER_TEMPLATES_DIR` | `<state>/templates` | yes | §4.2 |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | yes | OGraf library (§4.6) |
 | `BROWSER_OGRAF_UPLOAD_MAX_MB` | 256 | yes | largest OGraf ZIP (1–4096; unpacked at most 4×) |
@@ -609,7 +615,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_CA_DIR` | `/etc/mxl-browser-source/ca` | yes | PEM files imported into the NSS database at start |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | empty | yes | passed to Chromium as `--proxy-server` and `--proxy-bypass-list` |
 | `BROWSER_REQUIRE_TMPFS` | `true` | yes | §9; `false` only for tests |
-| `BROWSER_CHROMIUM_FLAGS_APPEND` | empty | yes | extra Chromium switches (expert; appended, never replacing the function's own) |
+| `BROWSER_CHROMIUM_FLAGS_APPEND` | empty | yes | extra Chromium switches, comma separated (expert; appended, never replacing the function's own). Since 1.3.0 `--disable-features`, `--enable-features`, `--disable-blink-features` and `--enable-blink-features` are merged into the function's own list (Chromium reads only the last of each), and an entry without `--` right after one of them continues its list (`--disable-features=A,B`) |
 
 ## 12. Metrics
 
@@ -625,8 +631,12 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `missed_grains_total` | counter | – |
 | `begin_frames_total` | counter | – |
 | `late_paints_total` | counter | – (paints more than one period after their BeginFrame) |
-| `paint_latency_seconds` | histogram | – (BeginFrame posted → `OnPaint`) |
+| `paint_latency_seconds` | histogram | – (BeginFrame posted → `OnPaint`, for the newest BeginFrame dispatched before the paint) |
+| `begin_frame_dispatch_seconds` | histogram | – (BeginFrame posted by the tick → sent on the UI thread) |
+| `paint_copy_seconds` | histogram | – (`OnPaint` copy into the frame store) |
+| `convert_wait_seconds` | histogram | – (paint copied → conversion starts) |
 | `convert_seconds` | histogram | – |
+| `frame_ready_seconds` | histogram | – (BeginFrame posted → grain buffers ready) |
 | `commit_lateness_seconds` | histogram | – (commit time − T(k)) |
 | `audio_samples_total` | counter | – |
 | `audio_underruns_total`, `audio_overruns_total`, `audio_resets_total` | counter | – |

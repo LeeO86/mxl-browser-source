@@ -111,6 +111,8 @@ Our own routes:
 
 `GET /api/v1/console` → `{"messages":[{"time":"2026-10-05T10:00:00Z","level":"error","message":"…","source":"…","line":12}]}` (last 200).
 
+`GET /api/v1/debug/frame-trace` → `{"period_ns":20000000,"events":[[<TAI ns>,"<kind>",a,b],…]}`, the newest 12 288 frame-loop events (about 40 s at 1080p50), oldest first (1.3.0, for diagnosis; `tests/tools/frame_trace.py` splits it into stages). Kinds: `tick` (a: the grain index the tick woke for), `commit` (a: grain index, b: the BeginFrame time of the fresh frame, 0 for a repeat), `bf_posted` (the tick posted a BeginFrame), `bf_sent` (the UI thread sent it; b: its posted time), `paint` (`OnPaint` copied; a: paint number, b: `OnPaint` entry), `convert_start` (a: paint number, b: its BeginFrame), `convert_end` (a: paint number, b: buffer set).
+
 ## Preview
 
 `GET /api/v1/preview.jpg` → `image/jpeg`, the newest frame at `BROWSER_PREVIEW_WIDTH`, composited over a mid-grey checkerboard where transparent. The preview is made after the request arrives (up to 100 ms); only when none comes in time is the last one sent (503 before the first paint).

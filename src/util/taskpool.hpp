@@ -21,7 +21,7 @@ namespace mbs::util
 class TaskPool
 {
 public:
-    // `fifoPriority` > 0: the workers try SCHED_FIFO at that priority (needs CAP_SYS_NICE; without
+    // `fifoPriority` > 0: the workers try SCHED_FIFO at that priority (needs RLIMIT_RTPRIO or CAP_SYS_NICE; without
     // it they stay at normal priority).
     explicit TaskPool(unsigned threads, int fifoPriority = 0)
     {

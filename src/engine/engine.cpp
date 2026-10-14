@@ -322,8 +322,8 @@ namespace mbs::engine
 
     void Engine::converterLoop()
     {
-        // The converter and its helpers run SCHED_FIFO just below the tick when CAP_SYS_NICE is
-        // granted: a paint converted late is a held frame (docs/performance.md).
+        // The converter and its helpers run SCHED_FIFO just below the tick when RLIMIT_RTPRIO allows
+        // it: a paint converted late is a held frame (docs/performance.md).
         int const priority = _settings.realtime ? kConvertPriority : 0;
         if (priority > 0)
         {
@@ -411,7 +411,8 @@ namespace mbs::engine
 
     void Engine::tickLoop()
     {
-        // The tick runs SCHED_FIFO when the container grants CAP_SYS_NICE (SPEC §2.2).
+        // The tick runs SCHED_FIFO when the container allows it (SPEC §2.2): RLIMIT_RTPRIO >= 10
+        // (docker --ulimit rtprio=10) for the non-root user, or an effective CAP_SYS_NICE.
         sched_param param{};
         param.sched_priority = kTickPriority;
         if (!_settings.realtime)
@@ -420,7 +421,7 @@ namespace mbs::engine
         }
         else if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0)
         {
-            log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs CAP_SYS_NICE"}});
+            log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs RLIMIT_RTPRIO >= 10 or CAP_SYS_NICE"}});
         }
         Tick tick(*this);
         std::uint64_t next = _clock.indexAt(_clock.nowNs()) + 1;

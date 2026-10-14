@@ -28,6 +28,7 @@ services:
     tmpfs: [/tmp]
     ulimits:
       nofile: 65536
+      rtprio: 10 # tick and converter threads SCHED_FIFO (SPEC §2.2)
     depends_on: [registry]
     volumes:
       - mxl:/Volumes/mxl

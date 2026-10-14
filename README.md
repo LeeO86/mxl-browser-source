@@ -9,7 +9,7 @@ Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writ
 The own MXL domain must be on a tmpfs: the MXL root, or a tmpfs mounted at the domain directory (anything else exits 78). On one host with Docker:
 
 ```sh
-docker run -d --name browser --network host --shm-size 1g -u 1000:1000 \
+docker run -d --name browser --network host --shm-size 1g --ulimit rtprio=10 -u 1000:1000 \
   -v /Volumes/mxl:/Volumes/mxl -v $PWD/config:/config \
   -e NMOS_REGISTRY_ADDRESS=10.0.0.10 -e NMOS_REGISTRY_PORT=8010 \
   -e MXL_OUTPUT_DOMAIN_DIR=/Volumes/mxl/browser-1 \
@@ -40,6 +40,10 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_DEVTOOLS` | `false` | Chrome DevTools through `/devtools/` (never the internal port) |
 | `BROWSER_PROFILE` | `ephemeral` | `persistent` keeps cookies and logins in `/config/profile` across restarts |
 | `BROWSER_WEBAUTHN` | `false` | `true` offers WebAuthn (passkeys) to pages; see sign-in pages below |
+| `BROWSER_WEBGPU` | `false` | `true` offers WebGPU (Dawn) to pages; off, `navigator.gpu.requestAdapter()` answers null without starting Dawn |
+| `BROWSER_FRAME_PIPELINE` | `1` | a paint that misses its tick is shown at the next one instead of held (one period more latency); `0` as in 1.2.0 |
+| `BROWSER_REALTIME` | `true` | tick and converter threads `SCHED_FIFO` when the container allows it: give it `--ulimit rtprio=10` (Compose `ulimits: {rtprio: 10}`); `--cap-add SYS_NICE` alone does not help a non-root process (SPEC §2.2) |
+| `BROWSER_CONVERT_THREADS` | `4` | threads that convert one frame (1–16) |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | the OGraf graphics library (on the `/config` volume) |
 | `BROWSER_OGRAF_UPLOAD_MAX_MB` | `256` | largest graphics ZIP (unpacked at most 4×) |
 | `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | `10000` | how long an OGraf action waits for the graphic; then 504 |

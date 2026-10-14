@@ -88,7 +88,7 @@ namespace mbs::engine
         Substitute onPageError = Substitute::Hold;
         std::uint32_t previewWidth = 960; // 0: no preview
         unsigned convertThreads = 4;      // bands of rows converted in parallel (latency, not CPU)
-        bool realtime = true;             // tick and converter threads SCHED_FIFO when CAP_SYS_NICE allows
+        bool realtime = true;             // tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO (or CAP_SYS_NICE) allows
     };
 
     /// One event of the frame-loop trace (docs/performance.md, "Where the time goes"). `ns` is TAI.
