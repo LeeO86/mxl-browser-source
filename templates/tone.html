@@ -1,10 +1,25 @@
 <!doctype html>
-<!-- A 1 kHz sine at -20 dBFS on both channels (SPEC §17 tone test). -->
+<!-- A 1 kHz sine at -20 dBFS on both channels (SPEC §17 tone test), WebAudio only (no media
+     element): it isolates CEF's audio capture and the function's FIFO from the media pipeline.
+     ?dbfs=-12 sets the level, ?f= the frequency; ?on=S&off=S switches the tone on for S seconds
+     and off for S seconds (CEF stops the stream 2 s after the page went quiet, so off > 2 tests
+     a stream stop and restart). -->
 <html><head><meta charset="utf-8"><title>tone</title></head>
-<body style="margin:0;background:#000;color:#888;font:40px sans-serif">1 kHz, -20 dBFS
+<body style="margin:0;background:#000;color:#888;font:40px sans-serif"><span id="t"></span>
 <script>
+const q = new URLSearchParams(location.search);
+const dbfs = Number(q.get("dbfs") || -20), f = Number(q.get("f") || 1000);
+const on = Number(q.get("on") || 0), off = Number(q.get("off") || 0);
+document.getElementById("t").textContent = `${f} Hz, ${dbfs} dBFS` + (on > 0 ? `, ${on} s on / ${off} s off` : "");
 const ctx = new AudioContext({sampleRate: 48000});
 const osc = ctx.createOscillator(), gain = ctx.createGain();
-osc.frequency.value = 1000; gain.gain.value = Math.pow(10, -20 / 20);
+osc.frequency.value = f; gain.gain.value = Math.pow(10, dbfs / 20);
 osc.connect(gain).connect(ctx.destination); osc.start();
+if (on > 0) {
+  // Scheduled on the audio clock, so the switching is sample-exact.
+  for (let t = ctx.currentTime + on; t < ctx.currentTime + 7200; t += on + off) {
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.setValueAtTime(Math.pow(10, dbfs / 20), t + off);
+  }
+}
 </script></body></html>

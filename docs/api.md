@@ -32,7 +32,9 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
  "render":{"mode":"gpu","renderer":"ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)","requested":"gpu","degraded":false,
            "format":"1080p50","width":1920,"height":1080},
  "grains":{"video":180000,"key":180000,"repeated":12,"missed":0,"late_paints":0,"begin_frames":180000},
- "audio":{"channels":2,"stream":true,"drift_ppm":3.1,"buffer_ms":60.2,"peaks_dbfs":[-20.1,-20.1],"underruns":0,"overruns":0},
+ "audio":{"channels":2,"stream":true,"drift_ppm":3.1,"buffer_ms":60.2,"peaks_dbfs":[-20.1,-20.1],"underruns":0,"overruns":0,
+          "gaps":0,"gap_ms":0,"gaps_unfilled":0},
+ "frame_clock":{"mode":"internal","locked":true,"phase_error_ms":0.02,"locks":2},
  "interact":{"sessions":2,"controlled":true},
  "nmos":{"registered":true,"node_id":"…","device_id":"…","domain_id":"…","senders":{"video":{"id":"…","flow_id":"…","enabled":true},
          "key":{"id":"…","flow_id":"…","enabled":true},"audio":{"id":"…","flow_id":"…","enabled":true}}},
@@ -111,7 +113,7 @@ Our own routes:
 
 `GET /api/v1/console` → `{"messages":[{"time":"2026-10-05T10:00:00Z","level":"error","message":"…","source":"…","line":12}]}` (last 200).
 
-`GET /api/v1/debug/frame-trace` → `{"period_ns":20000000,"events":[[<TAI ns>,"<kind>",a,b],…]}`, the newest 12 288 frame-loop events (about 40 s at 1080p50), oldest first (1.3.0, for diagnosis; `tests/tools/frame_trace.py` splits it into stages). Kinds: `tick` (a: the grain index the tick woke for), `commit` (a: grain index, b: the BeginFrame time of the fresh frame, 0 for a repeat), `bf_posted` (the tick posted a BeginFrame), `bf_sent` (the UI thread sent it; b: its posted time), `paint` (`OnPaint` copied; a: paint number, b: `OnPaint` entry), `convert_start` (a: paint number, b: its BeginFrame), `convert_end` (a: paint number, b: buffer set).
+`GET /api/v1/debug/frame-trace` → `{"period_ns":20000000,"frame_clock":"external","phase_ns":0,"events":[[<TAI ns>,"<kind>",a,b],…]}`, the newest 12 288 frame-loop events (about 40 s at 1080p50), oldest first (1.3.0, for diagnosis; `tests/tools/frame_trace.py` splits it into stages). Kinds: `tick` (a: the grain index the tick woke for), `commit` (a: grain index, b: the BeginFrame time of the fresh frame, 0 for a repeat), `bf_posted` (the tick posted a BeginFrame), `bf_sent` (the UI thread sent it; b: its posted time), `paint` (`OnPaint` copied; a: paint number, b: `OnPaint` entry), `convert_start` (a: paint number, b: its BeginFrame), `convert_end` (a: paint number, b: buffer set), `anchor` (internal frame clock, 1.3.0: a: the target time T(k+1) + φ, b: when `SetWindowlessFrameRate` ran, 0 when the UI thread was too late and nothing ran). With the internal frame clock there are no `bf_posted`/`bf_sent` events; a paint's BeginFrame is the newest T(n) + φ before it.
 
 ## Preview
 
