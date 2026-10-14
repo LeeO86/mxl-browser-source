@@ -256,8 +256,41 @@ examples. With `BROWSER_API_TOKEN` set it needs the bearer token, like `/api/v1`
 
 - **CORS:** off by default. `BROWSER_OGRAF_CORS_ORIGINS` (a space or comma list of origins, never `*`) adds the
   headers the spec suggests, for those origins only, as `WIDGET_FRAME_ANCESTORS` does for the widgets.
-- **Interop:** M3 runs SuperFlyTV's `ograf-server` default controller (its UI) against `/ograf/v1`, plus the
-  EBU `renderer-test` graphic.
+- **Interop:** see below.
+
+### Interop (M3, 2026-10-14)
+
+Checked against the EBU `server-api.yaml` (v1) field by field, and live with SuperFlyTV's `ograf-server` default
+controller (`packages/controller-default`, commit 5210f9c) in a browser: it lists the graphics, adds a graphic
+(the render target from our schema), loads, plays, updates, runs custom actions (l3rd-name *Highlight*,
+scoreboard *Goal (Home)*/*Goal (Away)*, seen on the output), stops and clears it on a layer. All calls 200;
+the layer goes `ready` → `on` (step 0) → `stopped` → `empty`. It needs `BROWSER_OGRAF_CORS_ORIGINS` set to the
+controller's origin; it sends `Content-Type: application/json` on every request, so even a GET has a preflight.
+
+Fixed on the way:
+
+- `renderTargetSchema` has `default: {"layer": 1}` (and the property `default: 1`, `title`). Without it the
+  controller's GDD form started at `{"layer": 0}` and every load answered 404.
+- `status.status` is `ERROR` when the renderer page failed to load or crashed (it was never `ERROR`).
+- A 401 on `/ograf/v1` is an `ErrorResponse` with the CORS headers (a browser controller saw only "Failed to fetch").
+- A clear filter whose `graphicId`/`graphicInstanceId` is not a string matches nothing (it matched everything).
+- `GET /graphics/{id}` returns the manifest in its file's key order (picojson sorted the keys; forms showed
+  fields without `order` alphabetically).
+
+Known differences, kept:
+
+- **409 and 504.** No renderer page (mode `page`, loading, recovering) answers 409; a graphic that does not
+  settle in time, 504. The spec lists 200/404/500/550 only, and the controller treats any other code as
+  "unexpected" (it logs the answer and throws; nothing breaks). We keep them: they say what happened, 500 would not.
+- **`manifest` in `GET /graphics/{id}`.** The spec lists `manifest` as required next to `graphic` but defines no
+  such property; we (and SuperFlyTV's server) send `graphic` and `metadata` only.
+- **`currentStep`.** The Server API marks it required in the playAction answer; the graphic spec says it is
+  `undefined` after the last step or with `stepCount` 0. We pass on what the graphic returns.
+- **Controller-only routes.** The controller uploads through `POST /serverApi/internal/graphics/graphic`
+  (multipart, SuperFlyTV's own) and loads custom GUIs from `metadata.content.url`. We have neither: upload in our
+  UI or `POST /api/v1/ograf/graphics` (§4); the controller logs "No metadata.content.url" and goes on.
+- **Timeouts.** The controller aborts every request after 3 s; a `load()` that takes longer shows as failed there
+  although the layer loads.
 
 ## 7. Own API and events (for the UI and the widget)
 
