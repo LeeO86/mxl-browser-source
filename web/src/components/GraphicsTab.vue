@@ -3,7 +3,7 @@
 // on-air state, and a form from the selected graphic's schema. Everything goes through the OGraf
 // Server API at /ograf/v1 and our /api/v1/ograf routes. The `ograf` widget is this component with
 // `widget` set (no upload or delete) and an optional layer filter.
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { act, api, live } from "../api.js";
 import { dataLabel, defaultsFor, missingRequired } from "../schema.js";
 import SchemaForm from "./SchemaForm.vue";
@@ -40,7 +40,7 @@ const stepCount = computed(() => manifest.value?.stepCount ?? 1);
 const steps = computed(() => stepCount.value > 1 || stepCount.value === -1);
 const modeOgraf = computed(() => source.value?.mode === "ograf");
 
-const STATE = { empty: "init", loading: "init", ready: "degraded", on: "failed", stopped: "init", error: "off" };
+const STATE = { empty: "init", loading: "init", ready: "degraded", on: "onair", stopped: "init", error: "off" };
 const stateLabel = (l) => (l.state === "on" ? "ON AIR" : l.state);
 
 async function loadManifest(id) {
@@ -67,7 +67,7 @@ watch(
   async () => {
     await loadManifest(graphicId.value);
     formData.value = loaded.value ? structuredClone(layer.value.data ?? {}) : (defaultsFor(schema.value) ?? {});
-    actionPayloads.value = {};
+    actionPayloads.value = Object.fromEntries((manifest.value?.customActions || []).map((a) => [a.id, defaultsFor(a.schema) ?? {}]));
   },
   { immediate: true },
 );
@@ -93,13 +93,23 @@ const next = (n) => action("playAction", { delta: 1 }, n);
 const stop = (n) => action("stopAction", {}, n);
 const update = () => action("updateAction", { data: formData.value });
 const custom = (id) => action(`customActions/${encodeURIComponent(id)}`, { payload: actionPayloads.value[id] ?? {} });
+const actionMissing = (a) => (a.schema ? missingRequired(a.schema, actionPayloads.value[a.id]) : []);
 const clear = (n) =>
   act(msg, () => api.put(`${TARGET}/clear`, { filters: [{ renderTarget: target(n) }] }), `Layer ${n} cleared.`);
 
 async function onFile(ev) {
   const file = ev.target.files?.[0];
   ev.target.value = "";
-  if (!file) return;
+  await uploadFile(file);
+}
+const dragging = ref(false);
+async function onDrop(ev) {
+  dragging.value = false;
+  if (props.widget) return;
+  await uploadFile(ev.dataTransfer?.files?.[0]);
+}
+async function uploadFile(file) {
+  if (!file || upload.value.busy) return;
   upload.value = { busy: true, report: null };
   try {
     const res = await api.upload("/api/v1/ograf/graphics", file);
@@ -131,7 +141,30 @@ const thumb = (g) => {
 const inUseText = (g) =>
   (g.v_inUse || []).map((u) => (u.current ? `on layer ${u.layer}` : `replaced, in use on layer ${u.layer}`)).join(", ");
 
-onMounted(refresh);
+// The output picture above the layers: /api/v1/preview.jpg once a second while this is shown.
+const previewUrl = ref("");
+let previewTimer = 0;
+let previewAlive = true;
+async function pollPreview() {
+  try {
+    const url = URL.createObjectURL(await api.blob("/api/v1/preview.jpg"));
+    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
+    previewUrl.value = url;
+  } catch {
+    /* no frame yet (503) */
+  }
+  if (previewAlive) previewTimer = setTimeout(pollPreview, 1000);
+}
+
+onMounted(() => {
+  refresh();
+  pollPreview();
+});
+onUnmounted(() => {
+  previewAlive = false;
+  clearTimeout(previewTimer);
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
+});
 </script>
 
 <template>
@@ -142,9 +175,13 @@ onMounted(refresh);
 
   <div class="grid two">
     <div class="panel">
+      <div class="og-preview">
+        <img v-if="previewUrl" :src="previewUrl" alt="Output preview" />
+        <span v-else class="muted small">No preview yet</span>
+      </div>
       <h3>
         Layers <span class="muted small">(8 is on top)</span>
-        <label class="inline right-btn"><input v-model="skipAnimation" type="checkbox" /> skip animation</label>
+        <label class="inline right-btn plain"><input v-model="skipAnimation" type="checkbox" /> skip animation</label>
       </h3>
       <table class="layers">
         <tbody>
@@ -159,7 +196,6 @@ onMounted(refresh);
                 <span v-if="l.pending" class="muted small"> · …</span>
                 <div v-if="l.error" class="msg err inline-msg">{{ l.error }}</div>
               </template>
-              <span v-else class="muted">empty</span>
             </td>
             <td class="nowrap right" @click.stop>
               <template v-if="l.state !== 'empty'">
@@ -207,16 +243,17 @@ onMounted(refresh);
         <h3>Custom actions</h3>
         <div v-for="a in manifest.customActions" :key="a.id" class="custom-action">
           <SchemaForm v-if="a.schema" v-model="actionPayloads[a.id]" :schema="a.schema" :name="a.name" />
+          <div v-if="actionMissing(a).length" class="msg err">Required: {{ actionMissing(a).join(", ") }}</div>
           <div class="actions">
             <span class="muted small grow">{{ a.description }}</span>
-            <button class="btn secondary small" :disabled="!modeOgraf" @click="custom(a.id)">{{ a.name }}</button>
+            <button class="btn secondary small" :disabled="!modeOgraf || actionMissing(a).length > 0" @click="custom(a.id)">{{ a.name }}</button>
           </div>
         </div>
       </template>
     </div>
   </div>
 
-  <div v-if="!widget" class="panel">
+  <div v-if="!widget" class="panel" :class="{ dropping: dragging }" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="onDrop">
     <h3>
       Library
       <button class="btn secondary small right-btn" @click="refresh">Refresh</button>
@@ -226,7 +263,7 @@ onMounted(refresh);
         {{ upload.busy ? "Uploading…" : "Upload ZIP" }}
         <input type="file" accept=".zip,application/zip" class="sr-only" :disabled="upload.busy" @change="onFile" />
       </label>
-      <span class="muted small">One or more <code>*.ograf.json</code> graphics per ZIP; a ZIP is taken as a whole or not at all; the same id replaces a graphic.</span>
+      <span class="muted small">Or drop it here. One or more <code>*.ograf.json</code> graphics per ZIP; a ZIP is taken as a whole or not at all; the same id replaces a graphic.</span>
     </div>
     <div v-if="upload.report" class="msg" :class="upload.report.ok ? 'ok' : 'err'">
       <template v-if="upload.report.ok">
@@ -269,5 +306,8 @@ onMounted(refresh);
 .gname { font-weight: 600; }
 .warn { color: var(--warn); }
 .custom-action { border-top: 1px solid var(--border); padding-top: .4rem; margin-top: .4rem; }
-label.btn.disabled { opacity: .5; }
+.og-preview { aspect-ratio: 16 / 9; background: repeating-conic-gradient(#555 0 25%, #777 0 50%) 0 0 / 16px 16px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; margin-bottom: .7rem; }
+.og-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+h3 .plain { text-transform: none; letter-spacing: normal; font-weight: 400; }
+.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; }
 </style>

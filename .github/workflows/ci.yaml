@@ -36,6 +36,8 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
           ./build/unit-tests
+      - name: Web UI unit tests (the OGraf schema form helpers)
+        run: node --test tests/unit/web/schema.test.mjs
 
   image:
     # The whole image (MXL, nmos-cpp, CEF, the binaries; the unit tests run again inside), then the
