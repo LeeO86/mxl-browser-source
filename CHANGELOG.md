@@ -2,16 +2,23 @@
 
 ## Unreleased (1.3.0)
 
-- EBU OGraf v1 (`docs/ograf.md`, work in progress on `feat/ograf`):
+- EBU OGraf v1 (`docs/ograf.md`, SPEC §4.6):
   - The source field `mode` (`page` | `ograf`). In `ograf` the browser shows a built-in renderer with 8 layers (one iframe each, 8 on top); the output is the same fill and key as before.
   - A graphics library under `BROWSER_OGRAF_DIR`: `POST /api/v1/ograf/graphics` with a ZIP, checked against the embedded v1 schemas; a ZIP is accepted or refused as a whole, the same id replaces a graphic, a layer keeps the old version until it is cleared.
-  - The OGraf Server API at `/ograf/v1` and the layer states at `/api/v1/ograf/layers` and on `/api/v1/events`.
+  - The OGraf Server API v1 at `/ograf/v1`: one renderer `main` whose render targets are the layers (`{"layer": 1…8}`, `renderTargetSchema` with the default layer 1), the graphics list, manifest (in its file's key order), thumbnails and delete (`?force=true` clears the layers that use it), load, play, stop, update, custom actions and clear with filters. Errors are RFC 7807 `ErrorResponse` objects, a 401 too. Besides the spec's codes, 409 (no renderer page) and 504 (the graphic did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS`) are kept on purpose (`docs/ograf.md` §6). Checked against `server-api.yaml` and live with SuperFlyTV's `ograf-server` default controller.
+  - CORS for `/ograf/v1` only for the origins in `BROWSER_OGRAF_CORS_ORIGINS` (off by default, `*` exits 78).
+  - The layer states at `/api/v1/ograf/layers` and on `/api/v1/events` (`{"type":"ograf","layers":[…]}`).
   - Layers come back after a renderer crash (at their step, without animation) and after a restart (loaded, not played).
   - In mode `ograf` requests outside the library are blocked (`BROWSER_OGRAF_NETWORK=local`), so graphics are proven to work offline.
-  - New settings `BROWSER_OGRAF_DIR`, `_UPLOAD_MAX_MB`, `_ACTION_TIMEOUT_MS`, `_NETWORK`, `_CORS_ORIGINS`; new metrics `ograf_*`.
+  - New settings (all restart): `BROWSER_OGRAF_DIR` (`<state>/ograf`), `BROWSER_OGRAF_UPLOAD_MAX_MB` (256), `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (10000), `BROWSER_OGRAF_NETWORK` (`local`), `BROWSER_OGRAF_CORS_ORIGINS` (empty).
+  - New metrics: `ograf_actions_total{action,result}`, `ograf_action_seconds{action}`, `ograf_layers{state}`, `ograf_graphics`, `ograf_uploads_total{result}`, `ograf_restores_total{result}`. The Grafana dashboard gets an OGraf row.
+  - Only the upload route streams its body (to `<library>/tmp/`); every other request body stays limited to 4 MiB.
+  - New third-party components: miniz (MIT) and jsoncons (BSL-1.0), in `THIRD_PARTY_NOTICES.md`.
   - The CasparCG template API stays (mode `page`).
   - The Graphics tab: the output preview, the 8 layers with their state (ON AIR, ready, stopped, error) and Load, Play, Next, Stop, Clear and "skip animation"; the library with upload (button or drag and drop), thumbnails, warnings and delete; a form from the graphic's schema with the GDD types (single- and multi-line text, select and select-multiple with their labels, colours `#rrggbb` and `#rrggbbaa`, percentage, duration, file paths), nested objects and lists, required fields that keep Load, Update and a custom action off, and a button with its own form per custom action. Leaving mode `ograf` with a graphic loaded asks first.
   - Widget `ograf`: `GET /widget/ograf[?layers=1,2&theme=…]` is the Graphics tab's preview, layers and form for the listed layers, without the library (no upload or delete); `GET /widgets` lists it with `min_size` 640×480.
+  - Tests: unit tests (manifests of the 9 EBU examples, ZIP safety, library, layers, Server API), `tests/integration/ograf_test.py` in CI, and the soak `tests/integration/ograf_soak.py` (2 h on the lab, `docs/performance.md`).
+- Upgrade from 1.2.0: nothing to change. `mode` defaults to `page`, so an existing `config.json`, preset or export shows its page as before; the library directory is created on the `/config` volume at the first start. Ports are unchanged.
 
 ## 1.2.0
 

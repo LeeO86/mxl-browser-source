@@ -172,6 +172,7 @@ The source document (in `config.json`, §11) holds the page and its presentation
 | `user_agent_suffix` | `mxl-browser-source/<version>` | appended to Chromium's user agent |
 | `reload_interval_s` | `0` | periodic reload, 0 = off |
 | `audio` | `true` | capture the page's audio (false = silent flow) |
+| `mode` | `page` | `page`: show `url`; `ograf`: show the built-in OGraf renderer with 8 layers (§4.6), `url` kept but not shown |
 | `presets` | `[]` | named sets of the fields above, one click in the UI |
 
 Changing the document through the UI or the API applies at once (navigation, injection, zoom) and is saved atomically. The raster size is the format's (§5.6); the page does not choose it.
@@ -223,6 +224,19 @@ No dialog ever waits for an operator: the output MUST NOT stall on a modal.
 WebAuthn needs Chromium's own dialog (passkey picker, security key prompt, the QR code for a phone), which only the Chrome runtime shows, in a native window; windowless CEF (always Alloy style) cannot show it and the container has no authenticator. A request would wait until its timeout, and a sign-in page that offers a passkey (Microsoft Entra ID behind Zscaler) hangs. Hidden (`disable-blink-features=WebAuth`), sign-in pages that check for `PublicKeyCredential` offer their other methods: Authenticator push, a code, a password (Entra's "Sign-in options" then lack "Face, fingerprint, PIN or security key"). A page that calls `navigator.credentials` with `publicKey` without checking still waits until its own timeout. `BROWSER_WEBAUTHN=true` restores Chromium's default. A sign-in survives restarts only with `BROWSER_PROFILE=persistent`; a tenant that allows passkeys only cannot sign in here.
 
 `permission_denied_total` counts only the requests Chromium passes to the handler. In CEF 144 geolocation, notifications, clipboard read and MIDI are already `denied` in the profile before any request, so Chromium refuses them itself and they are not counted. Camera and microphone reach the handler only when a capture device exists.
+
+### 4.6 OGraf (1.3.0)
+
+The function hosts EBU OGraf v1 graphics. [`docs/ograf.md`](docs/ograf.md) is the normative design (renderer, library, Server API, UI, security, tests); this section is the summary.
+
+- **Mode:** the source field `mode` (§4.1). `page` is today's behaviour and stays the default. `ograf` shows the renderer page `https://ograf.local/renderer/`, served from the binary: 8 full-raster same-origin iframes, one per layer, layer 8 on top. One CEF browser and one page per process stay (§2.3), and one BeginFrame still drives every layer, so the timing model of §2.4 is unchanged. Leaving `ograf` while a layer holds a graphic answers 409 unless the request has `?force=true`. In mode `ograf` the template API (§4.4), `navigate`, `back` and `forward` answer 409; nothing switches the mode on its own.
+- **Actions** go into the page as `Runtime.evaluate` with `awaitPromise` (the DevTools method of the renderer probe), so the API answers with the graphic's own result. A graphic that throws: 550; one that does not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS`: 504; no renderer page: 409 (kept on purpose, `docs/ograf.md` §6 "Error codes").
+- **Layer state** (`empty`, `loading`, `ready`, `on`, `stopped`, `error`, the step, the merged data) is kept by the function and saved in `<state>/ograf-layers.json`. After a renderer crash or hang (§13) every layer is restored at its step without animation; after a process restart the layers come back loaded, not played.
+- **Library:** `BROWSER_OGRAF_DIR` (default `<state>/ograf`). `POST /api/v1/ograf/graphics` takes a ZIP (streamed to disk, up to `BROWSER_OGRAF_UPLOAD_MAX_MB`, 4× unpacked, 10 000 entries, no symlinks or `..`), validates every manifest against the embedded v1 schemas (JSON Schema 2020-12, jsoncons) and accepts or refuses the ZIP as a whole. The same `id` replaces a graphic; a layer keeps the old package until it is cleared. Packages are served to the renderer at `https://ograf.local/packages/…` without network.
+- **Network:** in mode `ograf` the renderer and graphics may load only from `ograf.local` (`BROWSER_OGRAF_NETWORK=local`, default); `any` applies the URL policy of §14.3, a host list allows those hosts on top. Refused requests count as `navigation_blocked_total{reason="ograf_local"}`. `renderCharacteristics.accessToPublicInternet` follows the setting.
+- **Server API:** OGraf Server API v1 at `/ograf/v1` on `WEB_PORT`: renderer `main`, render targets `{"layer": 1…8}`, graphics list, manifest, thumbnail and delete, load, play, stop, update, custom actions and clear. Same token rule as `/api/v1`. CORS only for `BROWSER_OGRAF_CORS_ORIGINS`. Interop checked against `server-api.yaml` and SuperFlyTV's `ograf-server` controller (`docs/ograf.md` §6).
+- **UI:** the Graphics tab (preview, layers, schema form with the GDD types, custom actions, library) and the widget `ograf` (§10.6).
+- **Security:** graphics are code with the power of `/api/v1/source/execute` (§14): upload and delete sit behind the same token and are logged with the client address.
 
 ## 5. Video pipeline
 
@@ -462,7 +476,10 @@ The UI MUST work inside an iframe (no `X-Frame-Options: DENY`): the platform's p
 | GET | `/api/v1/events` | WebSocket: state, meters, dialogs, page events (4 Hz) |
 | GET | `/api/v1/interact` | WebSocket: §7.2 |
 | GET | `/devtools/…` | §10.4 |
-| GET | `/widgets`, `/widget/interaction` | §10.6 (outside `/api/v1`, no token) |
+| POST | `/api/v1/ograf/graphics` | upload an OGraf ZIP (§4.6) |
+| GET | `/api/v1/ograf/layers` | the 8 OGraf layer states (also on `/api/v1/events`) |
+| GET, POST, PUT, DELETE | `/ograf/v1/…` | OGraf Server API v1 (§4.6, `docs/ograf.md` §6); same token rule |
+| GET | `/widgets`, `/widget/interaction`, `/widget/ograf` | §10.6 (outside `/api/v1`, no token) |
 
 With `BROWSER_API_TOKEN` set, every `/api/v1/…` and `/devtools/…` request needs `Authorization: Bearer <token>` (the UI asks once). Empty (default) means no token: on the platform the ingress has no authentication and the decision is the platform's (FlowXer runs without a token there, D-092).
 
@@ -495,6 +512,10 @@ The contract of mxl-webrtc-monitor 1.3.0, mxl-replay 1.4.0 and mxl-color-correct
   app and keeps it for the browser tab. A bad `theme` answers 400, an unknown widget 404; other query
   parameters are ignored. These routes carry `Content-Security-Policy: frame-ancestors
   <WIDGET_FRAME_ANCESTORS>` and no `X-Frame-Options`.
+- `ograf` (1.3.0, `min_size` 640×480, parameter `layers`: a comma list of 1…8, other values ignored, default
+  all): the Graphics tab's preview, layers and form for the listed layers (the first one selected), without
+  the library (upload, delete) and the mode switch. `GET /widget/ograf[?theme=…&layers=1,2]`; same rules as
+  `interaction`.
 - The page posts `{type: "widget-ready"}` once it shows the preview, and `{type: "widget-size", w, h}` then
   and on every resize, to `window.parent`.
 - No preview contract (`PREVIEW_*`): the preview is the JPEG push of §7.3, not WebRTC or HLS.
@@ -579,6 +600,11 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_PROFILE` | `ephemeral` | yes | `ephemeral` (cache in `/tmp`, cleared at start) or `persistent` (`<state>/profile`, cookies and logins survive) |
 | `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5). A `disable-blink-features` in `BROWSER_CHROMIUM_FLAGS_APPEND` replaces the function's: add `WebAuth` to it |
 | `BROWSER_TEMPLATES_DIR` | `<state>/templates` | yes | §4.2 |
+| `BROWSER_OGRAF_DIR` | `<state>/ograf` | yes | OGraf library (§4.6) |
+| `BROWSER_OGRAF_UPLOAD_MAX_MB` | 256 | yes | largest OGraf ZIP (1–4096; unpacked at most 4×) |
+| `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | 10000 | yes | wait for a graphic's promise (100–600000), then 504 |
+| `BROWSER_OGRAF_NETWORK` | `local` | yes | mode `ograf`: `local` (library only), `any` (§14.3), or a comma list of extra hosts |
+| `BROWSER_OGRAF_CORS_ORIGINS` | empty | yes | origins (space or comma list) allowed to call `/ograf/v1` from a browser; `*` exits 78 |
 | `BROWSER_FONTS_DIR` | `<state>/fonts` | yes | extra fonts, added to fontconfig at start |
 | `BROWSER_CA_DIR` | `/etc/mxl-browser-source/ca` | yes | PEM files imported into the NSS database at start |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | empty | yes | passed to Chromium as `--proxy-server` and `--proxy-bypass-list` |
@@ -624,6 +650,12 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `devtools_sessions` | gauge | – |
 | `sender_enabled` | gauge | `sender` |
 | `nmos_registered` | gauge | – |
+| `ograf_actions_total` | counter | `action` (`load`, `play`, `stop`, `update`, `custom`, `clear`), `result` (`ok`, `error`, `timeout`) |
+| `ograf_action_seconds` | histogram | `action` (until the graphic's promise settles) |
+| `ograf_layers` | gauge | `state` (`empty`, `loading`, `ready`, `on`, `stopped`, `error`) |
+| `ograf_graphics` | gauge | – (graphics in the library) |
+| `ograf_uploads_total` | counter | `result` (`ok`, `rejected`) |
+| `ograf_restores_total` | counter | `result` (layers restored after a renderer reload) |
 
 Process CPU and memory come from the standard `process_*` metrics of the function plus the summed RSS (`cef_processes_resident_bytes`) and CPU time (`cef_processes_cpu_seconds_total`, including exited processes their parents reaped, so a renderer crash does not reset it) of the CEF processes below the function's process. Grafana dashboard: `deploy/grafana/mxl-browser-source.json` (grains and repeats, paint latency p50/p95, conversion time, audio drift and fill, page state, crashes, CPU and memory, interaction), copied into the platform's `dashboards/` by hand with the source commit.
 

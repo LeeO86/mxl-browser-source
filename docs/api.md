@@ -84,7 +84,9 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 ## OGraf (`docs/ograf.md`)
 
-The OGraf Server API v1 at `/ograf/v1` (EBU `server-api.yaml`): one renderer `main`, render targets `{"layer": 1…8}` (8 on top). Same token rule as `/api/v1`; CORS only for the origins in `BROWSER_OGRAF_CORS_ORIGINS`. Errors are RFC 7807 objects (`status`, `title`, `detail`); 550 = the graphic's method threw, 504 = it did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS`, 409 = no renderer page (mode `page`, loading or recovering).
+The OGraf Server API v1 at `/ograf/v1` (EBU `server-api.yaml`): one renderer `main`, render targets `{"layer": 1…8}` (8 on top). Same token rule as `/api/v1`; CORS only for the origins in `BROWSER_OGRAF_CORS_ORIGINS`. Errors are RFC 7807 objects (`status`, `title`, `detail`), also a 401: 404 = unknown graphic, layer or instance (a `graphicInstanceId` that is not the layer's), 550 = the graphic's method threw, 504 = it did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS`, 409 = no renderer page (mode `page`, loading or recovering). 409 and 504 are not in the spec's list (200/404/500/550); they are kept instead of 500 because they say what happened (`docs/ograf.md` §6, "Error codes"). A 200 action answer carries the graphic's own `statusCode` (and `currentStep` for `playAction`).
+
+CORS (`/ograf/v1/…` and `/api/v1/ograf/…`): an `Origin` listed in `BROWSER_OGRAF_CORS_ORIGINS` gets `Access-Control-Allow-Origin: <Origin>`, `Access-Control-Allow-Methods: GET, PUT, POST, HEAD, OPTIONS, DELETE`, `Access-Control-Allow-Headers: Content-Type, Accept, Authorization` and `Access-Control-Max-Age: 3600`; every answer has `Vary: Origin`. A preflight (`OPTIONS`) answers 204 without a token. Other origins, and every origin while the setting is empty (default), get no CORS headers.
 
 | Method | Path | Notes |
 | --- | --- | --- |
