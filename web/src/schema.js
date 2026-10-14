@@ -1,12 +1,18 @@
 // Helpers for OGraf graphic schemas (GDD, docs/ograf.md §8). Plain functions without Vue, so
 // tests/unit/web/schema.test.mjs can run them with `node --test`.
 
+/**
+ * A deep copy of JSON data. Not structuredClone: that throws a DataCloneError on Vue's reactive
+ * proxies (the manifests and the layer data are reactive).
+ */
+export const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
 const typeOf = (schema) => (Array.isArray(schema?.type) ? schema.type[0] : schema?.type);
 
 /** The schema's defaults as a value: `default` where given, objects built from their properties. */
 export function defaultsFor(schema) {
   if (!schema || typeof schema !== "object") return undefined;
-  if (schema.default !== undefined) return structuredClone(schema.default);
+  if (schema.default !== undefined) return clone(schema.default);
   const type = typeOf(schema);
   if (type === "object" && schema.properties) {
     const out = {};
@@ -80,13 +86,23 @@ export function missingRequired(schema, value, path = "") {
   return out;
 }
 
-/** A short label for a loaded graphic: its first non-hidden string fields. */
+/**
+ * A short label for a loaded graphic: its first two non-empty text fields in the schema's order
+ * (not hidden, no colours, selects or paths); without a schema the first two strings of the data.
+ */
 export function dataLabel(schema, data) {
   if (!data || typeof data !== "object") return "";
-  const props = schema?.properties || {};
-  return Object.entries(data)
-    .filter(([key, v]) => typeof v === "string" && v.trim() && !props[key]?.hidden)
+  const props = schema?.properties;
+  const keys = props
+    ? Object.entries(props)
+        .filter(([, s]) => !s?.hidden && ["text", "textarea"].includes(fieldKind(s)) && !String(s.gddType || "").startsWith("file-path"))
+        .sort(([, a], [, b]) => (a.order ?? 1e9) - (b.order ?? 1e9))
+        .map(([key]) => key)
+    : Object.keys(data);
+  return keys
+    .map((key) => data[key])
+    .filter((v) => typeof v === "string" && v.trim())
     .slice(0, 2)
-    .map(([, v]) => v.trim())
+    .map((v) => v.trim().split("\n")[0])
     .join(" · ");
 }

@@ -185,4 +185,5 @@ table.settings .valuecell { min-width: 12rem; }
 .schema-item { border-left: 2px solid var(--border); padding-left: .6rem; margin: .3rem 0; }
 .schema-field.missing input, .schema-field.missing select, .schema-field.missing textarea { border-color: var(--bad); }
 .schema-field input.colortext { width: 8rem; font-family: ui-monospace, monospace; }
+.schema-field input.pct { width: 8rem; }
 .schema-field input[type="color"] { width: 2.6rem; height: 2rem; padding: 0 .15rem; }

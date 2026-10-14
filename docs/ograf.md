@@ -274,40 +274,58 @@ connect), so the UI shows on-air state without polling.
 ## 8. Controller tab and `ograf` widget
 
 **A new UI tab "Graphics"** (Vue, like the others), shown in both modes; with mode `page` it offers the
-switch. It has:
+switch ("Switch to OGraf", no confirmation: nothing is lost). It has:
 
-- **Library:**
-  - the upload button (drag and drop too), with the warnings and errors per manifest;
-  - a list with thumbnail, name, id, version, step count and warnings;
-  - delete, with a confirmation.
+- **The preview** above the layers: `GET /api/v1/preview.jpg` once a second while the tab is open (no
+  Interact here; that stays in the Source tab).
 - **Layers:**
-  - 8 rows, top layer first: state with colour (empty / ready / ON AIR / stopped / error), graphic, step `n of
-    stepCount`, pending action;
-  - buttons: Load (the selected graphic), Play, Next (`delta: 1`, shown when `stepCount` > 1 or −1),
-    Stop, Clear, and "skip animation".
+  - 8 rows, top layer first: state with colour (empty / ready / ON AIR in solid red / stopped / error),
+    graphic, the first two visible string fields of its data, step `n of stepCount`, pending action, error;
+  - buttons per row: Play, Next (`delta: 1`, shown when `stepCount` > 1 or −1), Stop, Clear; one "skip
+    animation" box for all actions;
+  - a click on a row selects the layer for the form.
+  - "Back to the web page" sets mode `page`; with a graphic on any layer it asks first ("Clear and show the
+    page", sent with `?force=true`).
 - **Form** for the selected layer, built from the manifest's `schema`:
-  - Update sends `updateAction`, Load sends the form as `load()` data. Defaults come from the schema's
-    `default`.
-  - **Basic types:** string, number, integer, boolean, enum → select.
-  - **GDD types:** single-line and multi-line text, select and select-multiple, colour `RRGGBB` and
-    `RRGGBBAA` (colour picker), percentage, duration in ms; file and image paths as text.
+  - On an empty layer: the graphic select and Load, which sends the form as `load()` data. Defaults come
+    from the schema's `default`. On a loaded layer: the loaded data, Update (`updateAction`), Play, Next
+    step, Stop.
+  - **Basic types:** string, number, integer, boolean; an `enum` of any type → select (values keep their
+    type, so the integer selects of the EBU weather graphic send numbers).
+  - **GDD types:** single-line and multi-line text (`maxLength` honoured), select and select-multiple with
+    `gddOptions.labels` (then `enumNames`), colour `#rrggbb` and `#rrggbbaa` (colour picker for the RGB
+    part, a text field for the whole value, the alpha pair is kept; a value off the pattern is marked),
+    percentage (the number as stored, with the percent next to it: 1 = 100 %), duration in ms; file and
+    image paths as text. An unknown `gddType` falls back to its basic type.
   - **Nested:** object as a fieldset; array as a list with add, remove and move.
-  - `required` fields are marked, and Update and Load stay off while one is empty. `hidden` and `order` are
-    honoured as hints.
-  - Anything the generator doesn't know falls back to a JSON editor for that property (GDD's graceful
-    degradation).
+  - `required` fields are marked with a red `*` and a red border while empty, a line names the missing ones
+    (`person.name`, `rows[1].label`), and Load and Update stay off until they are filled. A required
+    boolean is never missing (unchecked is `false`). `hidden` properties are not shown, their value
+    (default or loaded) is sent unchanged; `order` sorts.
+  - Anything the generator doesn't know (an object without `properties`, an array without `items.type`, a
+    type like `null`) falls back to a JSON editor for that property (GDD's graceful degradation).
   - The function passes `data` through unchanged. It does not validate it against the graphic's schema on the
     server side (ograf-server doesn't either). The form guarantees the types.
-- **Custom actions:** one button per `customActions[]` entry, with a small form for its `schema` (same
-  generator).
-- **The preview** (the existing JPEG push) above the layers.
+- **Custom actions** (loaded layer): one button per `customActions[]` entry, with its description and a
+  small form for its `schema` (same generator, defaults filled in); required fields keep the button off.
+- **Library:**
+  - the upload button and drag and drop of a ZIP onto the library, with the warnings and errors per
+    manifest;
+  - a grid with thumbnail, name, id, version, step count, the layers that use it and the warnings;
+  - a click selects the graphic for Load; delete asks first, and for a graphic in use says that its layers
+    are cleared (`DELETE ?force=true`).
+
+`tests/integration/ograf/form` is a UI test graphic with every GDD type, required fields (also nested and
+in list items), a hidden field and two custom actions; it shows its data, step and last action as text.
 
 **Widget `ograf`:** the same component without the app around it, following the contract of SPEC §10.6
 (`/widgets`, `/widget/ograf?theme=…&layers=1,2,3`, CSP `frame-ancestors`, `widget-ready` and `widget-size`).
 
 - `min_size` 640×480.
-- Optional parameter `layers` limits the rows shown (one operator screen per layer group).
-- The upload and delete buttons are hidden in the widget; they stay in the tab.
+- Optional parameter `layers` (comma list of 1…8; other values are ignored) limits the rows shown (one
+  operator screen per layer group); the first listed layer is selected.
+- The library (upload, drop and delete) and the mode switch are not in the widget; they stay in the tab.
+  The graphic select for Load is.
 
 ## 9. Security
 

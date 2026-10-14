@@ -19,8 +19,20 @@ const s = computed(() => props.schema || {});
 const type = computed(() => (Array.isArray(s.value.type) ? s.value.type[0] : s.value.type));
 const gdd = computed(() => (typeof s.value.gddType === "string" ? s.value.gddType : ""));
 const label = computed(() => s.value.label || s.value.title || props.name);
+// `current` is the value as last emitted: two edits before the parent re-renders (a quick second
+// field, autofill, a script) must build on each other, not on the stale prop.
+let current = props.modelValue;
+watch(
+  () => props.modelValue,
+  (v) => (current = v),
+);
 const value = computed(() => props.modelValue);
-const set = (v) => emit("update:modelValue", v);
+const set = (v) => {
+  current = v;
+  emit("update:modelValue", v);
+};
+const currentObject = () => (current && typeof current === "object" && !Array.isArray(current) ? current : {});
+const currentList = () => (Array.isArray(current) ? current : []);
 const kind = computed(() => fieldKind(s.value));
 const empty = computed(() => value.value === undefined || value.value === null || value.value === "");
 
@@ -32,18 +44,18 @@ const entries = computed(() =>
 const isRequired = (key) => (s.value.required || []).includes(key);
 const objectValue = computed(() => (value.value && typeof value.value === "object" && !Array.isArray(value.value) ? value.value : {}));
 const setKey = (key, v) => {
-  const next = { ...objectValue.value };
+  const next = { ...currentObject() };
   if (v === undefined) delete next[key];
   else next[key] = v;
   set(next);
 };
 
 const list = computed(() => (Array.isArray(value.value) ? value.value : []));
-const setItem = (i, v) => set(list.value.map((x, j) => (j === i ? v : x)));
-const addItem = () => set([...list.value, defaultsFor(s.value.items || {})]);
-const removeItem = (i) => set(list.value.filter((_, j) => j !== i));
+const setItem = (i, v) => set(currentList().map((x, j) => (j === i ? v : x)));
+const addItem = () => set([...currentList(), defaultsFor(s.value.items || {})]);
+const removeItem = (i) => set(currentList().filter((_, j) => j !== i));
 const moveItem = (i, d) => {
-  const next = [...list.value];
+  const next = [...currentList()];
   const j = i + d;
   if (j < 0 || j >= next.length) return;
   [next[i], next[j]] = [next[j], next[i]];
@@ -70,7 +82,7 @@ const percentText = computed(() => (typeof value.value === "number" ? `${+(value
 const colorRgb = computed(() => (/^#[0-9a-f]{6}/i.test(value.value || "") ? value.value.slice(0, 7).toLowerCase() : "#000000"));
 const onPicker = (rgb) => {
   if (kind.value === "color-alpha") {
-    const alpha = /^#[0-9a-f]{8}$/i.test(value.value || "") ? value.value.slice(7, 9) : "ff";
+    const alpha = /^#[0-9a-f]{8}$/i.test(current || "") ? current.slice(7, 9) : "ff";
     set(rgb.toLowerCase() + alpha.toLowerCase());
   } else set(rgb.toLowerCase());
 };
@@ -155,7 +167,7 @@ const id = `sf-${Math.random().toString(36).slice(2, 9)}`;
       <span v-if="colorBad" class="msg err inline-msg">{{ kind === "color-alpha" ? "#rrggbbaa" : "#rrggbb" }}</span>
     </div>
     <div v-else-if="kind === 'percentage'" class="row tight">
-      <input :id="id" type="number" step="0.01" :min="s.minimum" :max="s.maximum" :value="value ?? ''" @input="setNumber($event.target.value)" />
+      <input :id="id" class="pct" type="number" step="0.01" :min="s.minimum" :max="s.maximum" :value="value ?? ''" @input="setNumber($event.target.value)" />
       <span class="muted small">{{ percentText }} (1 = 100 %)</span>
     </div>
     <input

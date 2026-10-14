@@ -31,8 +31,7 @@
         "type": "array", "label": "Rows", "order": 13,
         "items": { "type": "object", "required": ["label"], "properties": { "label": { "type": "string", "label": "Label" }, "value": { "type": "number", "label": "Value" } } },
         "default": [{ "label": "one", "value": 1 }]
-      },
-      "extra": { "type": "object", "label": "Extra (JSON)", "order": 14 }
+      }
     }
   },
   "customActions": [

@@ -10,6 +10,8 @@
   - In mode `ograf` requests outside the library are blocked (`BROWSER_OGRAF_NETWORK=local`), so graphics are proven to work offline.
   - New settings `BROWSER_OGRAF_DIR`, `_UPLOAD_MAX_MB`, `_ACTION_TIMEOUT_MS`, `_NETWORK`, `_CORS_ORIGINS`; new metrics `ograf_*`.
   - The CasparCG template API stays (mode `page`).
+  - The Graphics tab: the output preview, the 8 layers with their state (ON AIR, ready, stopped, error) and Load, Play, Next, Stop, Clear and "skip animation"; the library with upload (button or drag and drop), thumbnails, warnings and delete; a form from the graphic's schema with the GDD types (single- and multi-line text, select and select-multiple with their labels, colours `#rrggbb` and `#rrggbbaa`, percentage, duration, file paths), nested objects and lists, required fields that keep Load, Update and a custom action off, and a button with its own form per custom action. Leaving mode `ograf` with a graphic loaded asks first.
+  - Widget `ograf`: `GET /widget/ograf[?layers=1,2&theme=…]` is the Graphics tab's preview, layers and form for the listed layers, without the library (no upload or delete); `GET /widgets` lists it with `min_size` 640×480.
 
 ## 1.2.0
 

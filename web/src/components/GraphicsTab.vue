@@ -5,7 +5,7 @@
 // `widget` set (no upload or delete) and an optional layer filter.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { act, api, live } from "../api.js";
-import { dataLabel, defaultsFor, missingRequired } from "../schema.js";
+import { clone, dataLabel, defaultsFor, missingRequired } from "../schema.js";
 import SchemaForm from "./SchemaForm.vue";
 
 const props = defineProps({
@@ -66,7 +66,7 @@ watch(
   [() => layer.value.graphicInstanceId, graphicId],
   async () => {
     await loadManifest(graphicId.value);
-    formData.value = loaded.value ? structuredClone(layer.value.data ?? {}) : (defaultsFor(schema.value) ?? {});
+    formData.value = loaded.value ? clone(layer.value.data ?? {}) : (defaultsFor(schema.value) ?? {});
     actionPayloads.value = Object.fromEntries((manifest.value?.customActions || []).map((a) => [a.id, defaultsFor(a.schema) ?? {}]));
   },
   { immediate: true },
@@ -170,7 +170,7 @@ onUnmounted(() => {
 <template>
   <div v-if="source && !modeOgraf" class="warnbox">
     The source shows a web page (mode page). OGraf graphics need the renderer.
-    <button class="btn small" @click="setMode('ograf')">Switch to OGraf</button>
+    <button v-if="!widget" class="btn small" @click="setMode('ograf')">Switch to OGraf</button>
   </div>
 
   <div class="grid two">
@@ -188,7 +188,7 @@ onUnmounted(() => {
           <tr v-for="l in allLayers" :key="l.layer" :class="{ selected: l.layer === selectedLayer }" @click="selectedLayer = l.layer">
             <td class="num">{{ l.layer }}</td>
             <td><span class="pill" :class="STATE[l.state]">{{ stateLabel(l) }}</span></td>
-            <td class="ellipsis">
+            <td class="ellipsis" :title="l.error || ''">
               <template v-if="l.state !== 'empty'">
                 {{ l.graphicName }}
                 <span class="muted small">{{ dataLabel(manifests[l.graphicId]?.schema, l.data) }}</span>
@@ -297,6 +297,8 @@ onUnmounted(() => {
 
 <style scoped>
 .layers tr { cursor: pointer; }
+.layers td.ellipsis { max-width: 0; width: 100%; }
+.thumb span { background: rgba(0, 0, 0, .65); color: #ddd; padding: .1rem .4rem; border-radius: 3px; }
 .layers tr.selected td { background: var(--panel2); }
 .library { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .7rem; margin-top: .7rem; }
 .graphic { border: 1px solid var(--border); border-radius: 6px; padding: .5rem; cursor: pointer; display: flex; flex-direction: column; gap: .25rem; }

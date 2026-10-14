@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { dataLabel, defaultsFor, fieldKind, missingRequired, optionLabel } from "../../../web/src/schema.js";
+import { clone, dataLabel, defaultsFor, fieldKind, missingRequired, optionLabel } from "../../../web/src/schema.js";
 
 const form = JSON.parse(readFileSync(new URL("../../integration/ograf/form/form.ograf.json", import.meta.url)));
 const schema = form.schema;
@@ -28,11 +28,12 @@ test("every GDD type gets its editor, unknown types fall back to JSON", () => {
   assert.deepEqual(kinds, {
     headline: "text", body: "textarea", kind: "select", level: "select", tags: "multiselect", color: "color",
     shade: "color-alpha", opacity: "percentage", hold: "number", logo: "text", live: "boolean", secret: "text",
-    person: "object", rows: "array", extra: "json",
+    person: "object", rows: "array",
   });
   assert.equal(fieldKind({ type: "null" }), "json");
   assert.equal(fieldKind({ type: ["integer", "null"] }), "number");
   assert.equal(fieldKind({ type: "array" }), "json");
+  assert.equal(fieldKind({ type: "object" }), "json");
 });
 
 test("option labels: gddOptions.labels, then enumNames, then the value", () => {
@@ -56,6 +57,19 @@ test("required fields: empty strings and missing keys count, nested objects and 
 });
 
 test("the layer label shows the first visible strings", () => {
-  assert.equal(dataLabel(schema, { secret: "s", headline: "  Hi ", body: "B", kind: "news" }), "Hi · B");
+  assert.equal(dataLabel(schema, { secret: "s", color: "#ffffff", kind: "news", body: "B\nC", headline: "  Hi " }), "Hi · B");
+  // the EBU scoreboard: names, not the colour that sorts first
+  const score = { properties: { homeShort: { type: "string", order: 1 }, awayShort: { type: "string", order: 2 }, awayColor: { type: "string", gddType: "color-rrggbb" } } };
+  assert.equal(dataLabel(score, { awayColor: "#d4192c", awayShort: "AJX", homeShort: "FCZ" }), "FCZ · AJX");
+  assert.equal(dataLabel(undefined, { a: 1, b: "x", c: "y", d: "z" }), "x · y");
   assert.equal(dataLabel(schema, null), "");
+});
+
+test("clone copies reactive proxies, which structuredClone refuses", () => {
+  const proxied = new Proxy({ tags: ["a"], n: 1 }, {});
+  assert.throws(() => structuredClone(proxied));
+  const c = clone(proxied);
+  assert.deepEqual(c, { tags: ["a"], n: 1 });
+  assert.equal(clone(undefined), undefined);
+  assert.deepEqual(defaultsFor(new Proxy(p.tags, {})), ["b"]);
 });
