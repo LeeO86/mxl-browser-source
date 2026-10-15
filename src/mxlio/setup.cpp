@@ -2,7 +2,9 @@
 #include "mxlio/setup.hpp"
 
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
+#include <unistd.h>
 
 #include <filesystem>
 #include <fstream>
@@ -140,5 +142,68 @@ namespace mbs::mxlio
                 log::info("nofile_raised", {{"from", static_cast<std::uint64_t>(before)}, {"to", static_cast<std::uint64_t>(files.rlim_cur)}});
             }
         }
+    }
+
+    std::string metricsShmDir(std::string const& shmRoot, std::string const& seed, unsigned uid)
+    {
+        std::string name;
+        for (char const c : seed)
+        {
+            bool const plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+            name.push_back(plain ? c : '_');
+        }
+        if (name.size() > 64)
+        {
+            name.resize(64);
+        }
+        if (name.empty() || name.find_first_not_of('.') == std::string::npos)
+        {
+            name = "default";
+        }
+        return shmRoot + "/mxl-browser-source-metrics-" + name + "-" + std::to_string(uid);
+    }
+
+    bool linkToFreshDir(std::string const& link, std::string const& target, std::string& error)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        auto const fail = [&](std::string const& step, std::string const& what) {
+            error = step + " " + what;
+            return false;
+        };
+        struct stat st{};
+        if (::lstat(target.c_str(), &st) == 0)
+        {
+            if (st.st_uid != ::getuid())
+            {
+                return fail("keep", target + ": it belongs to uid " + std::to_string(st.st_uid));
+            }
+            fs::remove_all(target, ec);
+            if (ec)
+            {
+                return fail("clear", target + ": " + ec.message());
+            }
+        }
+        fs::create_directories(target, ec);
+        if (ec)
+        {
+            return fail("create", target + ": " + ec.message());
+        }
+        fs::permissions(target, fs::perms::owner_all, fs::perm_options::replace, ec);
+        if (ec)
+        {
+            return fail("chmod", target + ": " + ec.message());
+        }
+        fs::remove_all(link, ec);
+        if (ec)
+        {
+            return fail("remove", link + ": " + ec.message());
+        }
+        fs::create_directory_symlink(target, link, ec);
+        if (ec)
+        {
+            return fail("link", link + ": " + ec.message());
+        }
+        return true;
     }
 }

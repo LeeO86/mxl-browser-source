@@ -35,4 +35,12 @@ namespace mbs::mxlio
 
     /// Raises RLIMIT_NOFILE to its hard limit (MXL keeps one descriptor per grain).
     void raiseFileLimit();
+
+    /// The directory under `shmRoot` (/dev/shm) for Chromium's histogram file of this instance
+    /// (SPEC §6): per NMOS seed and uid, so instances that share /dev/shm keep their own.
+    [[nodiscard]] std::string metricsShmDir(std::string const& shmRoot, std::string const& seed, unsigned uid);
+
+    /// Makes `link` a symbolic link to `target`, a fresh empty directory of this user. False with
+    /// `error` naming the step that failed (a `target` of another user is never removed).
+    bool linkToFreshDir(std::string const& link, std::string const& target, std::string& error);
 }

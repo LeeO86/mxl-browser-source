@@ -487,12 +487,21 @@ namespace mbs::app
         auto const metrics = _cachePath + "/BrowserMetrics";
         if (!mxlio::isTmpfs(_cachePath) && fs::is_directory("/dev/shm", ec) && mxlio::isTmpfs("/dev/shm"))
         {
-            auto const target = std::string("/dev/shm/mxl-browser-source-metrics");
-            fs::remove_all(target, ec);
-            fs::create_directories(target, ec);
-            fs::remove_all(metrics, ec);
-            fs::create_directory_symlink(target, metrics, ec);
-            log::info("browser_metrics_on_tmpfs", {{"path", target}, {"ok", !ec}});
+            // Per NMOS seed and uid: instances that share /dev/shm never clear each other's.
+            auto const target = mxlio::metricsShmDir("/dev/shm", _cfg.nmosSeed, static_cast<unsigned>(::getuid()));
+            std::string error;
+            if (mxlio::linkToFreshDir(metrics, target, error))
+            {
+                log::info("browser_metrics_on_tmpfs", {{"path", target}, {"ok", true}});
+            }
+            else
+            {
+                log::warn("browser_metrics_on_tmpfs", {{"path", target}, {"ok", false}, {"error", error}});
+                if (fs::is_symlink(metrics, ec))
+                {
+                    fs::remove(metrics, ec); // Chromium makes the directory in the cache instead
+                }
+            }
         }
         else if (fs::is_symlink(metrics, ec))
         {
