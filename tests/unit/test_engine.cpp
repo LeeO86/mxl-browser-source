@@ -271,6 +271,37 @@ TEST_CASE("a page that is not ready holds, or shows the substitute; its paint wa
     CHECK(engine.stats().tick.repeatedHold == 1);
 }
 
+TEST_CASE("a ready page without a new paint holds its last frame, whatever on_page_error says")
+{
+    for (auto const substitute : {engine::Substitute::Black, engine::Substitute::Transparent, engine::Substitute::Hold})
+    {
+        CAPTURE(static_cast<int>(substitute));
+        ManualClock clock(3100 * kPeriod);
+        Recorder outputs;
+        util::Metrics metrics("test_");
+        auto settings = small();
+        settings.onPageError = substitute;
+        Engine engine(settings, clock, outputs, metrics);
+        engine.setPageState(PageState::Ready);
+        engine.start();
+
+        auto const red = solid(0, 0, 255, 255);
+        engine.paint(red.data(), kWidth * 4, kWidth, kHeight);
+        waitConverted(engine, 1);
+        clock.tick(3101); // the paint
+        clock.tick(3102); // no paint: a static page, a held lower third or a late paint
+        clock.tick(3103);
+        clock.release();
+        engine.stop();
+
+        REQUIRE(outputs.video.size() == 3);
+        for (auto const& grain : outputs.video)
+        {
+            CHECK(grain.fill == fillOf(red, true));
+        }
+    }
+}
+
 TEST_CASE("disabled senders write nothing; the key flow gets the fill's index")
 {
     ManualClock clock(4000 * kPeriod);

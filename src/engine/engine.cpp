@@ -610,15 +610,19 @@ namespace mbs::engine
         std::uint64_t beginFrameNs = 0;
         {
             std::lock_guard lock{_setsMutex};
-            if (state == PageState::Ready && !_pending.empty())
+            if (state == PageState::Ready)
             {
                 // The oldest converted frame (SPEC §2.4). Without the pipeline at most one waits,
                 // the newest. With it up to two wait: a paint that missed its tick is shown at the
                 // next one instead of being replaced, and the frame behind it waits one period.
-                _current = _pending.front();
-                _pending.erase(_pending.begin());
-                fresh = true;
-                beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
+                // Without a new frame a ready page holds its last one, whatever on_page_error says.
+                if (!_pending.empty())
+                {
+                    _current = _pending.front();
+                    _pending.erase(_pending.begin());
+                    fresh = true;
+                    beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
+                }
             }
             else if (_settings.onPageError == Substitute::Transparent)
             {
