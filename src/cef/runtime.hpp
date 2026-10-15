@@ -38,6 +38,7 @@ namespace mbs::cef
         int devtoolsPort = 0;             // 0: no remote debugging
         std::string devtoolsOrigin;       // --remote-allow-origins
         bool webauthn = false;            // BROWSER_WEBAUTHN
+        bool webgpu = false;              // BROWSER_WEBGPU
         std::vector<std::string> extraFlags; // BROWSER_CHROMIUM_FLAGS_APPEND, appended
         std::string templatesDir;         // served at https://templates.local/
         std::string ografPackagesDir;     // served at https://ograf.local/packages/
@@ -94,7 +95,8 @@ namespace mbs::cef
         void close();
         [[nodiscard]] bool exists() const;
 
-        void beginFrame();
+        /// Posts one SendExternalBeginFrame to the UI thread; `sent` runs there right before it.
+        void beginFrame(std::function<void()> sent = {});
         void invalidate();
         void navigate(std::string const& url);
         void reload(bool ignoreCache);

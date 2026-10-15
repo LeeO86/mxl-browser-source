@@ -18,6 +18,9 @@ namespace mbs::engine
 {
     namespace
     {
+        constexpr int kTickPriority = 10;   // SCHED_FIFO, as the gateway's media threads
+        constexpr int kConvertPriority = 9; // below the tick: the tick must never wait for a conversion
+
         void allocate(GrainBuffers& set, EngineSettings const& s)
         {
             set.fill.assign(static_cast<std::size_t>(convert::v210RowBytes(s.width)) * s.height, 0);
@@ -68,7 +71,12 @@ namespace mbs::engine
         , _store(settings.width, settings.height)
     {
         // Every buffer is allocated here; nothing is allocated per frame (SPEC §18 rule 14).
-        _pool.resize(_settings.videoDelayGrains + 3);
+        _settings.pipelineGrains = std::min<std::uint32_t>(_settings.pipelineGrains, 1);
+        _pool.resize(_settings.videoDelayGrains + _settings.pipelineGrains + 3);
+        _pending.reserve(_settings.pipelineGrains + 2);
+        _poolBeginFrame.assign(_pool.size(), 0);
+        _trace.resize(kTraceEvents);
+        _store.setClock([this] { return _clock.nowNs(); });
         for (auto& set : _pool)
         {
             allocate(set, _settings);
@@ -143,16 +151,20 @@ namespace mbs::engine
     void Engine::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
     {
         auto const now = _clock.nowNs();
-        if (!_store.paint(bgra, stride, width, height))
+        auto const sent = _dispatchedNs.load();
+        if (!_store.paint(bgra, stride, width, height, FrameStore::Stamp{sent, now, 0}))
         {
             std::lock_guard lock{_statsMutex};
             ++_stats.paintsRejected;
             return;
         }
-        // A paint carries no frame id, and a BeginFrame on an unchanged page gets no paint, so a
-        // paint cannot be paired with "its" BeginFrame: the latency is taken from the newest one.
+        auto const stored = _clock.nowNs();
+        _metrics.observe("paint_copy_seconds", {}, static_cast<double>(stored - now) / 1e9);
+        record(TraceKind::Paint, stored, ++_paints, now); // the store's sequence: both count accepted paints
+        // A paint carries no frame id, and a BeginFrame on an unchanged page gets no paint: the
+        // latency is taken from the newest BeginFrame dispatched before the paint (same thread).
         // Paints that came too late show up as paints never committed (stats().latePaints).
-        if (auto const sent = _lastBeginFrameNs.load(); sent != 0 && now >= sent)
+        if (sent != 0 && now >= sent)
         {
             _metrics.observe("paint_latency_seconds", {}, static_cast<double>(now - sent) / 1e9);
         }
@@ -163,9 +175,46 @@ namespace mbs::engine
         _wake.notify_one();
     }
 
-    void Engine::beginFrameSent()
+    std::uint64_t Engine::beginFrameSent()
     {
-        _lastBeginFrameNs.store(_clock.nowNs());
+        auto const now = _clock.nowNs();
+        _lastBeginFrameNs.store(now);
+        record(TraceKind::BeginFramePosted, now);
+        return now;
+    }
+
+    void Engine::beginFrameDispatched(std::uint64_t postedNs)
+    {
+        auto const now = _clock.nowNs();
+        if (postedNs != 0 && now >= postedNs)
+        {
+            _metrics.observe("begin_frame_dispatch_seconds", {}, static_cast<double>(now - postedNs) / 1e9);
+        }
+        _dispatchedNs.store(postedNs);
+        record(TraceKind::BeginFrameSent, now, 0, postedNs);
+    }
+
+    void Engine::record(TraceKind kind, std::uint64_t ns, std::uint64_t a, std::uint64_t b)
+    {
+        std::lock_guard lock{_traceMutex};
+        _trace[_traceNext] = TraceEvent{ns, kind, a, b};
+        if (++_traceNext == _trace.size())
+        {
+            _traceNext = 0;
+            _traceFull = true;
+        }
+    }
+
+    std::vector<TraceEvent> Engine::trace() const
+    {
+        std::lock_guard lock{_traceMutex};
+        std::vector<TraceEvent> out;
+        if (_traceFull)
+        {
+            out.assign(_trace.begin() + static_cast<std::ptrdiff_t>(_traceNext), _trace.end());
+        }
+        out.insert(out.end(), _trace.begin(), _trace.begin() + static_cast<std::ptrdiff_t>(_traceNext));
+        return out;
     }
 
     void Engine::setPageState(PageState state)
@@ -234,7 +283,7 @@ namespace mbs::engine
     {
         // The BeginFrame of the current grain may still draw it; its paint is committed at the
         // next tick and leaves the delay ring videoDelayGrains later.
-        return _clock.indexAt(_clock.nowNs()) + 1 + _settings.videoDelayGrains;
+        return _clock.indexAt(_clock.nowNs()) + 1 + _settings.pipelineGrains + _settings.videoDelayGrains;
     }
 
     EngineStats Engine::stats() const
@@ -263,17 +312,26 @@ namespace mbs::engine
     {
         for (int id = 0; id < static_cast<int>(_pool.size()); ++id)
         {
-            if (id != _ready && std::find(_ring.begin(), _ring.end(), id) == _ring.end())
+            if (std::find(_pending.begin(), _pending.end(), id) == _pending.end() && std::find(_ring.begin(), _ring.end(), id) == _ring.end())
             {
                 return id;
             }
         }
-        return kNone; // cannot happen: the ring and _ready hold at most delay+2 of delay+3 sets
+        return kNone; // cannot happen: the ring and _pending hold at most delay+pipeline+2 of delay+pipeline+3 sets
     }
 
     void Engine::converterLoop()
     {
-        util::TaskPool converters(std::max(1U, _settings.convertThreads) - 1); // the converter thread helps
+        // The converter and its helpers run SCHED_FIFO just below the tick when RLIMIT_RTPRIO allows
+        // it: a paint converted late is a held frame (docs/performance.md).
+        int const priority = _settings.realtime ? kConvertPriority : 0;
+        if (priority > 0)
+        {
+            sched_param param{};
+            param.sched_priority = priority;
+            pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+        }
+        util::TaskPool converters(std::max(1U, _settings.convertThreads) - 1, priority); // the converter thread helps
         std::uint8_t const* last = nullptr; // the newest paint, valid until the next take()
         while (true)
         {
@@ -303,14 +361,31 @@ namespace mbs::engine
                 {
                     continue;
                 }
+                auto const start = _clock.nowNs();
+                record(TraceKind::ConvertStart, start, frame.sequence, frame.stamp.beginFrameNs);
+                if (frame.stamp.storedNs != 0 && start >= frame.stamp.storedNs)
+                {
+                    _metrics.observe("convert_wait_seconds", {}, static_cast<double>(start - frame.stamp.storedNs) / 1e9);
+                }
                 auto const t0 = std::chrono::steady_clock::now();
                 convertInto(_pool[static_cast<std::size_t>(id)], _settings, frame.bgra, &converters);
                 _metrics.observe("convert_seconds", {}, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+                auto const end = _clock.nowNs();
+                record(TraceKind::ConvertEnd, end, frame.sequence, static_cast<std::uint64_t>(id));
+                if (frame.stamp.beginFrameNs != 0 && end >= frame.stamp.beginFrameNs)
+                {
+                    _metrics.observe("frame_ready_seconds", {}, static_cast<double>(end - frame.stamp.beginFrameNs) / 1e9);
+                }
                 bool replaced = false;
                 {
                     std::lock_guard lock{_setsMutex};
-                    replaced = _ready != kNone;
-                    _ready = id;
+                    _poolBeginFrame[static_cast<std::size_t>(id)] = frame.stamp.beginFrameNs;
+                    if (_pending.size() > _settings.pipelineGrains)
+                    {
+                        _pending.erase(_pending.begin()); // the oldest waiting frame is never shown (late)
+                        replaced = true;
+                    }
+                    _pending.push_back(id);
                 }
                 std::lock_guard lock{_statsMutex};
                 ++_stats.converted;
@@ -336,12 +411,17 @@ namespace mbs::engine
 
     void Engine::tickLoop()
     {
-        // The tick runs SCHED_FIFO when the container grants CAP_SYS_NICE (SPEC §2.2).
+        // The tick runs SCHED_FIFO when the container allows it (SPEC §2.2): RLIMIT_RTPRIO >= 10
+        // (docker --ulimit rtprio=10) for the non-root user, or an effective CAP_SYS_NICE.
         sched_param param{};
-        param.sched_priority = 10;
-        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0)
+        param.sched_priority = kTickPriority;
+        if (!_settings.realtime)
         {
-            log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs CAP_SYS_NICE"}});
+            log::info("tick_priority_normal", {{"reason", "BROWSER_REALTIME=false"}});
+        }
+        else if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0)
+        {
+            log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs RLIMIT_RTPRIO >= 10 or CAP_SYS_NICE"}});
         }
         Tick tick(*this);
         std::uint64_t next = _clock.indexAt(_clock.nowNs()) + 1;
@@ -352,11 +432,13 @@ namespace mbs::engine
             {
                 break;
             }
-            auto const now = _clock.indexAt(_clock.nowNs());
+            auto const wokeNs = _clock.nowNs();
+            auto const now = _clock.indexAt(wokeNs);
             if (now < next)
             {
                 continue; // woke early
             }
+            record(TraceKind::Tick, wokeNs, now);
             tick.run(now, _pageState.load());
             {
                 std::lock_guard lock{_statsMutex};
@@ -370,16 +452,18 @@ namespace mbs::engine
     {
         bool fresh = false;
         int out = kNone;
+        std::uint64_t beginFrameNs = 0;
         {
             std::lock_guard lock{_setsMutex};
-            if (state == PageState::Ready)
+            if (state == PageState::Ready && !_pending.empty())
             {
-                if (_ready != kNone)
-                {
-                    _current = _ready;
-                    _ready = kNone;
-                    fresh = true;
-                }
+                // The oldest converted frame (SPEC §2.4). Without the pipeline at most one waits,
+                // the newest. With it up to two wait: a paint that missed its tick is shown at the
+                // next one instead of being replaced, and the frame behind it waits one period.
+                _current = _pending.front();
+                _pending.erase(_pending.begin());
+                fresh = true;
+                beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
             }
             else if (_settings.onPageError == Substitute::Transparent)
             {
@@ -389,7 +473,7 @@ namespace mbs::engine
             {
                 _current = kBlack;
             }
-            // Hold keeps the last frame; a paint kept in _ready waits for the page to be ready.
+            // Hold keeps the last frame; converted paints wait in _pending for the page to be ready.
             _ring[index % _ring.size()] = _current;
             out = _ring[(index + 1) % _ring.size()]; // what was current videoDelayGrains ticks ago
         }
@@ -406,6 +490,7 @@ namespace mbs::engine
         auto const now = _clock.nowNs();
         auto const start = _clock.indexNs(index);
         _metrics.observe("commit_lateness_seconds", {}, now > start ? static_cast<double>(now - start) / 1e9 : 0.0);
+        record(TraceKind::Commit, now, index, fresh ? std::max<std::uint64_t>(1, beginFrameNs) : 0);
         return fresh;
     }
 

@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- Frame-loop test page (docs/performance.md, M5): n animated elements in one page, the same
+     elements and places as n layers of the OGraf lab graphic tests/integration/ograf/anim.
+     index.html?n=4 animates slots 1-4. Everything it loads is local (GSAP 3.12.5 in lib/). -->
+<html><head><meta charset="utf-8"><title>frame loop</title>
+<style>html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}</style></head>
+<body>
+<script type="module">
+import { gsap } from './lib/gsap-core.js';
+import { CSSPlugin } from './lib/CSSPlugin.js';
+import { animate } from './anim.js';
+gsap.registerPlugin(CSSPlugin);
+const n = Math.max(0, Math.min(8, Number(new URLSearchParams(location.search).get('n') ?? 8)));
+for (let slot = 0; slot < n; ++slot) {
+  animate(document.body, slot, gsap);
+}
+</script>
+</body></html>

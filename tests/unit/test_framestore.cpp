@@ -81,3 +81,18 @@ TEST_CASE("frame store never hands out a torn frame")
     CHECK(uniform);
     CHECK(increasing);
 }
+
+TEST_CASE("frame store carries each paint's timing with it")
+{
+    FrameStore store(4, 2);
+    std::uint64_t clock = 500;
+    store.setClock([&] { return clock; });
+    std::vector<std::uint8_t> a(4 * 2 * 4, 1), b(4 * 2 * 4, 2);
+    CHECK(store.paint(a.data(), 16, 4, 2, FrameStore::Stamp{100, 200, 0}));
+    clock = 700;
+    CHECK(store.paint(b.data(), 16, 4, 2, FrameStore::Stamp{300, 400, 0}));
+    auto const frame = store.take();
+    CHECK(frame.stamp.beginFrameNs == 300);
+    CHECK(frame.stamp.paintNs == 400);
+    CHECK(frame.stamp.storedNs == 700);
+}

@@ -359,3 +359,116 @@ TEST_CASE("a preview is made on request from the newest paint")
     clock.release();
     engine.stop();
 }
+
+TEST_CASE("with the frame pipeline a late paint is shown one grain later instead of being replaced")
+{
+    for (std::uint32_t pipeline : {0U, 1U})
+    {
+        CAPTURE(pipeline);
+        ManualClock clock(3000 * kPeriod);
+        Recorder outputs;
+        util::Metrics metrics("test_");
+        auto settings = small();
+        settings.pipelineGrains = pipeline;
+        Engine engine(settings, clock, outputs, metrics);
+        engine.setRequestFrame([&] { engine.beginFrameDispatched(engine.beginFrameSent()); });
+        engine.setPageState(PageState::Ready);
+        engine.start();
+
+        clock.tick(3001); // BeginFrame posted and sent at 3001
+        auto const red = solid(0, 0, 255, 255);
+        auto const blue = solid(255, 0, 0, 255);
+        engine.paint(red.data(), kWidth * 4, kWidth, kHeight); // a late paint of the BeginFrame before
+        waitConverted(engine, 1);
+        engine.paint(blue.data(), kWidth * 4, kWidth, kHeight); // the paint of 3001's BeginFrame
+        waitConverted(engine, 2);
+        clock.tick(3002);
+        clock.tick(3003);
+        CHECK(engine.nextVisibleIndex() == 3004 + pipeline);
+        clock.release();
+        engine.stop();
+
+        REQUIRE(outputs.video.size() == 3); // 3001 has no paint yet
+        if (pipeline == 0)
+        {
+            CHECK(outputs.video[1].fill == fillOf(blue, true)); // red was replaced
+            CHECK(outputs.video[2].fill == fillOf(blue, true)); // a held frame
+            CHECK(engine.stats().latePaints == 1);
+            CHECK(engine.stats().tick.repeated == 2);
+        }
+        else
+        {
+            CHECK(outputs.video[1].fill == fillOf(red, true));
+            CHECK(outputs.video[2].fill == fillOf(blue, true));
+            CHECK(engine.stats().latePaints == 0);
+            CHECK(engine.stats().tick.repeated == 1);
+        }
+
+        // The trace: the BeginFrame posted and sent, the paints, their conversions, and commits
+        // that carry the BeginFrame's time.
+        std::uint64_t posted = 0;
+        int paints = 0;
+        int converted = 0;
+        int fresh = 0;
+        for (auto const& e : engine.trace())
+        {
+            if (e.kind == engine::TraceKind::BeginFramePosted && posted == 0)
+            {
+                posted = e.ns;
+            }
+            paints += e.kind == engine::TraceKind::Paint ? 1 : 0;
+            converted += e.kind == engine::TraceKind::ConvertEnd ? 1 : 0;
+            if (e.kind == engine::TraceKind::Commit && e.b != 0)
+            {
+                ++fresh;
+                CHECK(e.b == posted);
+            }
+        }
+        CHECK(posted == 3001 * kPeriod + kMargin);
+        CHECK(paints == 2);
+        CHECK(converted == 2);
+        CHECK(fresh == (pipeline == 0 ? 1 : 2));
+        CHECK(metrics.render().find("test_frame_ready_seconds_count 2") != std::string::npos);
+    }
+}
+
+TEST_CASE("a paint belongs to the newest BeginFrame dispatched before it, not to one still queued")
+{
+    ManualClock clock(4000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    Engine engine(small(), clock, outputs, metrics);
+    std::mutex mutex;
+    std::vector<std::uint64_t> posted; // posted by the tick, dispatched by the test (the "UI thread")
+    engine.setRequestFrame([&] {
+        auto const t = engine.beginFrameSent();
+        std::lock_guard lock{mutex};
+        posted.push_back(t);
+    });
+    engine.setPageState(PageState::Ready);
+    engine.start();
+
+    auto const red = solid(0, 0, 255, 255);
+    clock.tick(4001);
+    engine.beginFrameDispatched(posted.at(0));
+    clock.tick(4002); // 4002's BeginFrame is posted but still queued when the late paint of 4001 arrives
+    engine.paint(red.data(), kWidth * 4, kWidth, kHeight);
+    waitConverted(engine, 1);
+    engine.beginFrameDispatched(posted.at(1));
+    engine.paint(red.data(), kWidth * 4, kWidth, kHeight);
+    waitConverted(engine, 2);
+    clock.release();
+    engine.stop();
+
+    std::vector<std::uint64_t> owners;
+    for (auto const& e : engine.trace())
+    {
+        if (e.kind == engine::TraceKind::ConvertStart)
+        {
+            owners.push_back(e.b);
+        }
+    }
+    REQUIRE(owners.size() == 2);
+    CHECK(owners[0] == posted.at(0));
+    CHECK(owners[1] == posted.at(1));
+}

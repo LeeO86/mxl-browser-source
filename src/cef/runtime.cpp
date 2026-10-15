@@ -392,11 +392,34 @@ namespace mbs::cef
         {
             out.insert(out.end(), {"disable-gpu", "disable-gpu-compositing", "use-gl=disabled"});
         }
+        // Chromium reads one value per switch (the last one), so feature lists are merged: the
+        // function's entries first, then BROWSER_CHROMIUM_FLAGS_APPEND's.
+        auto const merge = [&out](std::string const& name, std::string const& values) {
+            auto const prefix = name + "=";
+            for (auto& sw : out)
+            {
+                if (sw.rfind(prefix, 0) == 0)
+                {
+                    sw += "," + values;
+                    return;
+                }
+            }
+            out.push_back(prefix + values);
+        };
         // Windowless CEF cannot show Chromium's WebAuthn dialog: without PublicKeyCredential,
         // sign-in pages offer other methods instead of waiting for a passkey (SPEC §4.5).
         if (!s.webauthn)
         {
-            out.push_back("disable-blink-features=WebAuth");
+            merge("disable-blink-features", "WebAuth");
+        }
+        // WebGPU (Dawn on Vulkan) is not used by broadcast graphics and has no Vulkan driver in the
+        // image: a page testing navigator.gpu made Dawn probe for Vulkan, and a helper died with
+        // "stack smashing detected" in the M4 soak. Off by default: navigator.gpu stays (Blink always
+        // exposes it) but requestAdapter() answers null without Dawn. The GPU process still logs one
+        // failed vkCreateInstance at start (Chromium decides WebGPU-on-Vulkan interop before features).
+        if (!s.webgpu)
+        {
+            merge("disable-features", "WebGPUService,WebGPUBlobCache");
         }
         if (!s.proxyServer.empty())
         {
@@ -410,10 +433,32 @@ namespace mbs::cef
         {
             out.push_back("remote-allow-origins=" + s.devtoolsOrigin);
         }
+        // BROWSER_CHROMIUM_FLAGS_APPEND is a comma list, so "--disable-features=A,B" arrives as
+        // "--disable-features=A" and "B": an entry without "--" right after a feature list continues it.
+        std::string list;
         for (auto const& flag : s.extraFlags)
         {
-            auto const trimmed = flag.rfind("--", 0) == 0 ? flag.substr(2) : flag;
-            if (!trimmed.empty())
+            bool const dashed = flag.rfind("--", 0) == 0;
+            auto const trimmed = dashed ? flag.substr(2) : flag;
+            if (trimmed.empty())
+            {
+                continue;
+            }
+            if (!dashed && !list.empty() && trimmed.find('=') == std::string::npos)
+            {
+                merge(list, trimmed);
+                continue;
+            }
+            auto const eq = trimmed.find('=');
+            auto const name = trimmed.substr(0, eq);
+            list.clear();
+            if (eq != std::string::npos &&
+                (name == "disable-features" || name == "enable-features" || name == "disable-blink-features" || name == "enable-blink-features"))
+            {
+                merge(name, trimmed.substr(eq + 1));
+                list = name;
+            }
+            else
             {
                 out.push_back(trimmed);
             }
@@ -1070,12 +1115,16 @@ namespace mbs::cef
         return _impl->exists.load();
     }
 
-    void Browser::beginFrame()
+    void Browser::beginFrame(std::function<void()> sent)
     {
         auto impl = _impl;
-        postToUi([impl] {
+        postToUi([impl, sent = std::move(sent)] {
             if (auto host = impl->host())
             {
+                if (sent)
+                {
+                    sent();
+                }
                 host->SendExternalBeginFrame();
             }
         });

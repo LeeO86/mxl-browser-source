@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -16,14 +17,31 @@ namespace mbs::engine
     public:
         FrameStore(std::uint32_t width, std::uint32_t height);
 
+        /// Timing of one paint (TAI ns, 0 when unknown), carried with its buffer for the
+        /// frame-loop metrics and trace (docs/performance.md).
+        struct Stamp
+        {
+            std::uint64_t beginFrameNs = 0; // the newest BeginFrame posted before the paint
+            std::uint64_t paintNs = 0;      // OnPaint entered
+            std::uint64_t storedNs = 0;     // the copy is complete (set by paint() with the clock)
+        };
+
+        /// The clock for Stamp::storedNs (optional).
+        void setClock(std::function<std::uint64_t()> now) { _now = std::move(now); }
+
         /// UI thread. Copies one paint (`stride` bytes per row). False when the size differs
         /// (a resize in flight): the paint is dropped.
-        bool paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height);
+        bool paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height, Stamp stamp);
+        bool paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
+        {
+            return paint(bgra, stride, width, height, Stamp{});
+        }
 
         struct Frame
         {
             std::uint8_t const* bgra = nullptr; // width × 4 bytes per row
             std::uint64_t sequence = 0;         // paints since construction, 1 for the first
+            Stamp stamp;
         };
 
         /// Converter. The newest paint not taken yet, or no `bgra` when none arrived. The frame
@@ -38,6 +56,8 @@ namespace mbs::engine
         std::uint32_t _width;
         std::uint32_t _height;
         std::vector<std::uint8_t> _buffers[3];
+        Stamp _stamps[3];
+        std::function<std::uint64_t()> _now;
         mutable std::mutex _mutex;
         int _writing = 0; // the UI thread copies into this one
         int _ready = -1;  // newest complete paint, not taken yet

@@ -76,7 +76,9 @@ One process stays one CEF browser and one page (SPEC §2.3). The renderer is a b
     registry when its layer reloads, and nothing leaks into the next graphic on that layer.
 - **Cost:** same-origin iframes stay in the same renderer process. One BeginFrame still drives every frame's
   `requestAnimationFrame` and CSS animations, so frame accuracy (SPEC §2.4) is unchanged. It adds a little
-  memory per non-empty layer (a document, roughly 1–5 MB). An empty layer is `about:blank`, hidden.
+  memory per non-empty layer (a document, roughly 1–5 MB). An empty layer is a fresh, hidden `about:blank`
+  iframe: since M5 a clear replaces the layer's iframe element instead of navigating it to `about:blank`, so the
+  old browsing context (documents, module map, GPU resources) is released with it (`docs/performance.md`).
 - **What iframes don't fix:**
   - a graphic in an endless loop blocks the whole renderer (same process); the existing hang detection
     (SPEC §13) covers it;

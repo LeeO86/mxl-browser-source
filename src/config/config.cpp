@@ -64,6 +64,9 @@ namespace mbs::config
                 {"BROWSER_VIDEO_DELAY_GRAINS", "auto", true, false, "Video delay in grains for A/V alignment (auto or 0-10)"},
                 {"BROWSER_FRAME_LEAD", "1", true, false, "Video latency in periods assumed by BROWSER_VIDEO_DELAY_GRAINS=auto (1-2)"},
                 {"BROWSER_RENDER", "auto", true, false, "auto, gpu, software"},
+                {"BROWSER_FRAME_PIPELINE", "1", true, false, "1: each paint has two periods instead of one to reach its grain (one period more latency)"},
+                {"BROWSER_REALTIME", "true", true, false, "Tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO >= 10 (or CAP_SYS_NICE) allows it"},
+                {"BROWSER_CONVERT_THREADS", "4", true, false, "Threads converting one frame in bands of rows (1-16)"},
                 {"BROWSER_ON_PAGE_ERROR", "hold", false, false, "hold, transparent, black, slate"},
                 {"BROWSER_HANG_TIMEOUT_MS", "3000", false, false, "The renderer does not answer a liveness probe for this long: hang"},
                 {"BROWSER_MAX_RESIDENT_MB", "0", false, false, "Memory warning threshold of all CEF processes (0 = off)"},
@@ -79,6 +82,7 @@ namespace mbs::config
                 {"BROWSER_API_TOKEN", "", true, true, "Optional bearer token for the API"},
                 {"BROWSER_PROFILE", "ephemeral", true, false, "ephemeral or persistent"},
                 {"BROWSER_WEBAUTHN", "false", true, false, "Offer WebAuthn (passkeys) to pages; off: sign-in pages fall back to other methods"},
+                {"BROWSER_WEBGPU", "false", true, false, "Offer WebGPU to pages; off: no navigator.gpu and no Vulkan/Dawn probe in the GPU process"},
                 {"BROWSER_TEMPLATES_DIR", "", true, false, "Local templates (default: <state>/templates)"},
                 {"BROWSER_OGRAF_DIR", "", true, false, "OGraf graphics library (default: <state>/ograf)"},
                 {"BROWSER_OGRAF_UPLOAD_MAX_MB", "256", true, false, "Largest OGraf ZIP upload in MiB (unpacked: 4x)"},
@@ -432,6 +436,9 @@ namespace mbs::config
         c.avOffsetMs = parseInt("BROWSER_AV_OFFSET_MS", get("BROWSER_AV_OFFSET_MS"), -500, 500);
         c.videoDelayGrains = lower(get("BROWSER_VIDEO_DELAY_GRAINS")) == "auto" ? -1 : parseInt("BROWSER_VIDEO_DELAY_GRAINS", get("BROWSER_VIDEO_DELAY_GRAINS"), 0, 10);
         c.frameLead = parseInt("BROWSER_FRAME_LEAD", get("BROWSER_FRAME_LEAD"), 1, 2);
+        c.realtime = parseBool("BROWSER_REALTIME", get("BROWSER_REALTIME"));
+        c.framePipeline = parseInt("BROWSER_FRAME_PIPELINE", get("BROWSER_FRAME_PIPELINE"), 0, 1);
+        c.convertThreads = parseInt("BROWSER_CONVERT_THREADS", get("BROWSER_CONVERT_THREADS"), 1, 16);
         c.render = parseEnum<Render>("BROWSER_RENDER", get("BROWSER_RENDER"), {{"auto", Render::Auto}, {"gpu", Render::Gpu}, {"software", Render::Software}});
         c.onPageError = parseEnum<PageErrorMode>("BROWSER_ON_PAGE_ERROR", get("BROWSER_ON_PAGE_ERROR"),
             {{"hold", PageErrorMode::Hold}, {"transparent", PageErrorMode::Transparent}, {"black", PageErrorMode::Black}, {"slate", PageErrorMode::Slate}});
@@ -449,6 +456,7 @@ namespace mbs::config
         c.apiToken = get("BROWSER_API_TOKEN");
         c.persistentProfile = parseEnum<bool>("BROWSER_PROFILE", get("BROWSER_PROFILE"), {{"ephemeral", false}, {"persistent", true}});
         c.webauthn = parseBool("BROWSER_WEBAUTHN", get("BROWSER_WEBAUTHN"));
+        c.webgpu = parseBool("BROWSER_WEBGPU", get("BROWSER_WEBGPU"));
         c.templatesDir = get("BROWSER_TEMPLATES_DIR").empty() ? c.stateDir + "/templates" : get("BROWSER_TEMPLATES_DIR");
         c.ografDir = get("BROWSER_OGRAF_DIR").empty() ? c.stateDir + "/ograf" : get("BROWSER_OGRAF_DIR");
         c.ografUploadMaxMb = parseInt("BROWSER_OGRAF_UPLOAD_MAX_MB", get("BROWSER_OGRAF_UPLOAD_MAX_MB"), 1, 4096);

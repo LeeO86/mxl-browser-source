@@ -15,7 +15,7 @@ namespace mbs::engine
         }
     }
 
-    bool FrameStore::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
+    bool FrameStore::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height, Stamp stamp)
     {
         if (width != _width || height != _height)
         {
@@ -40,7 +40,12 @@ namespace mbs::engine
                 std::memcpy(out + y * row, bgra + y * stride, row);
             }
         }
+        if (_now)
+        {
+            stamp.storedNs = _now();
+        }
         std::lock_guard lock{_mutex};
+        _stamps[target] = stamp;
         if (_ready >= 0)
         {
             ++_dropped;
@@ -64,7 +69,7 @@ namespace mbs::engine
         }
         std::swap(_reading, _ready);
         _ready = -1;
-        return Frame{_buffers[_reading].data(), _readySequence};
+        return Frame{_buffers[_reading].data(), _readySequence, _stamps[_reading]};
     }
 
     std::uint64_t FrameStore::dropped() const

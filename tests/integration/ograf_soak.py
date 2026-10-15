@@ -11,6 +11,7 @@ and memory, console errors, and the actions run and failed since the last row. S
 """
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -28,7 +29,7 @@ CSV = sys.argv[4] if len(sys.argv) > 4 else "ograf-soak.csv"
 GPU = sys.argv[5] if len(sys.argv) > 5 else "0"
 BASE = f"http://{HOST}:{PORT}"
 TARGET = "/ograf/v1/renderers/main/target/graphicInstance"
-PAUSE = 0.6  # seconds between two actions on one layer
+PAUSE = 0.6  # mean seconds between two actions on one layer; jittered ±25 % so the layer threads do not fall into step (8 h soak, docs/performance.md)
 DOCKER = os.environ.get("DOCKER", "docker").split()
 
 lock = threading.Lock()
@@ -100,7 +101,7 @@ def act(layer, manifest, action, verb, params, instance=None):
         totals[(action, result)] = totals.get((action, result), 0) + 1
         if result == "fail":
             failures.append((time.strftime("%H:%M:%S"), layer, manifest["id"], action, f"{code}/{inner}", str(answer)[:200]))
-    time.sleep(PAUSE)
+    time.sleep(PAUSE * random.uniform(0.75, 1.25))
     return answer if isinstance(answer, dict) else {}
 
 
