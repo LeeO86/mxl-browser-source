@@ -29,7 +29,7 @@
   for (let n = 1; n <= LAYERS; n++) {
     const frame = newFrame(n);
     document.body.appendChild(frame);
-    layers[n] = { n, frame, ready: null, generation: 0 };
+    layers[n] = { n, frame, ready: null, generation: 0, cancel: null };
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,9 +48,29 @@
     return win && win.ografLayer;
   }
 
+  // A new generation of the layer: a load still running for an older one is rejected at once
+  // (its iframe is replaced, so its promises would otherwise never settle and the call would
+  // hang until the function's action timeout).
+  function supersede(layer) {
+    layer.generation++;
+    const cancel = layer.cancel;
+    layer.cancel = null;
+    if (cancel) cancel();
+  }
+
+  // Starts a load's generation; `superseded` rejects when the layer is loaded again or cleared.
+  function claim(layer) {
+    supersede(layer);
+    const generation = layer.generation;
+    let reject;
+    const superseded = new Promise((_, r) => { reject = r; });
+    superseded.catch(() => {}); // settles after the load did too: nobody waits for it then
+    layer.cancel = () => reject(new Error('layer ' + layer.n + ' was loaded again or cleared meanwhile'));
+    return { generation, superseded };
+  }
+
   // A fresh layer document: its own globals, CSS, fonts and custom element registry.
-  function freshDocument(layer) {
-    const generation = ++layer.generation;
+  function freshDocument(layer, generation) {
     return new Promise((resolve) => {
       layer.frame.onload = () => { if (layer.generation === generation) resolve(); };
       layer.frame.src = '/renderer/layer.html?g=' + generation;
@@ -67,7 +87,7 @@
       }
     }
     layer.ready = null;
-    layer.generation++;
+    supersede(layer);
     // A new iframe element instead of navigating the old one to about:blank: the old browsing
     // context, its documents, module map and GPU resources go with it (M5: the renderer kept
     // about 300 MB after all layers were cleared when the frames were only navigated away).
@@ -83,11 +103,12 @@
       if (!layer) throw new Error('no layer ' + n);
       if (method === 'load') {
         await dispose(layer);
-        const loading = (async () => {
-          await freshDocument(layer);
+        const { generation, superseded } = claim(layer);
+        const loading = Promise.race([(async () => {
+          await freshDocument(layer, generation);
           layer.frame.style.visibility = 'visible';
           return api(layer).load(args);
-        })();
+        })(), superseded]);
         layer.ready = loading.then(() => undefined, () => undefined); // actions wait for load() (spec)
         return payload(await loading);
       }
