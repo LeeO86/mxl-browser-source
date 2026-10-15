@@ -40,6 +40,7 @@ namespace mbs::cef
         std::string devtoolsOrigin;       // --remote-allow-origins
         bool webauthn = false;            // BROWSER_WEBAUTHN
         bool webgpu = false;              // BROWSER_WEBGPU
+        bool serviceWorkers = false;      // BROWSER_SERVICE_WORKERS: off, renderers hide navigator.serviceWorker
         std::vector<std::string> extraFlags; // BROWSER_CHROMIUM_FLAGS_APPEND, appended
         std::string templatesDir;         // served at https://templates.local/
         std::string ografPackagesDir;     // served at https://ograf.local/packages/
@@ -132,7 +133,8 @@ namespace mbs::cef
         void focus(bool focused) override;
 
     private:
-        friend class Client; // the CEF handlers (runtime.cpp)
+        friend class Client;         // the CEF handlers (runtime.cpp)
+        friend class WorkerRequests; // service-worker requests (runtime.cpp)
         struct Impl;
         std::shared_ptr<Impl> _impl;
     };

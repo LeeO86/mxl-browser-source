@@ -40,6 +40,7 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_DEVTOOLS` | `false` | Chrome DevTools through `/devtools/` (never the internal port) |
 | `BROWSER_PROFILE` | `ephemeral` | `persistent` keeps cookies and logins in `/config/profile` across restarts |
 | `BROWSER_WEBAUTHN` | `false` | `true` offers WebAuthn (passkeys) to pages; see sign-in pages below |
+| `BROWSER_SERVICE_WORKERS` | `false` | `true` lets pages register service workers; requests of service and shared workers follow the URL policy (`BROWSER_URL_ALLOW`/`DENY`, the built-in deny list, OGraf `network=local`); use it only with a NetworkPolicy egress fence (SPEC §14.3). Off, pages see no `navigator.serviceWorker` and service and shared workers cannot fetch |
 | `BROWSER_WEBGPU` | `false` | `true` offers WebGPU (Dawn) to pages; off, `navigator.gpu.requestAdapter()` answers null without starting Dawn |
 | `BROWSER_FRAME_PIPELINE` | `1` | a paint that misses its tick is shown at the next one instead of held (one period more latency); `0` as in 1.2.0 |
 | `BROWSER_FRAME_CLOCK` | `internal` | `internal`: Chromium paces the page with its own frame clock at the house rate, phase-locked to TAI (smooth `<video>`, SPEC §2.4); 25 and 50 Hz formats, 59.94 and 29.97 fall back to `external`. `external`: one BeginFrame per grain, as in 1.2.0 |

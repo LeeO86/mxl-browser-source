@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // URL policy (SPEC §14.3): which pages and sub-resources the browser may load. Checked on
-// navigation, on redirects and for every sub-resource by host. DNS-based bypasses are
-// possible; the NetworkPolicy is the real fence.
+// navigation, on redirects and for every sub-resource by host, a service worker's requests too.
+// DNS-based bypasses are possible; the NetworkPolicy is the real fence.
 #pragma once
 
 #include <optional>
@@ -30,12 +30,13 @@ namespace mbs::ops
         std::vector<int> ownPorts;      // WEB_PORT, NMOS_PORT, NMOS_PORT+1, the DevTools port
         bool localOnly = false;               // OGraf mode: only templates.local, ograf.local and localExtra
         std::vector<std::string> localExtra;  // BROWSER_OGRAF_NETWORK hosts (the other rules still apply)
+        bool serviceWorkers = false;          // BROWSER_SERVICE_WORKERS: pages may register service workers
     };
 
     struct UrlVerdict
     {
         bool allowed = true;
-        std::string reason; // navigation_blocked_total{reason}: scheme, link_local, loopback, kubernetes, registry, own_port, denied, not_allowed, ograf_local
+        std::string reason; // navigation_blocked_total{reason}: scheme, link_local, loopback, kubernetes, registry, own_port, denied, not_allowed, ograf_local, service_worker
     };
 
     class UrlPolicy
@@ -48,10 +49,17 @@ namespace mbs::ops
         /// for sub-resources and inline use).
         [[nodiscard]] UrlVerdict check(std::string_view url, bool topLevel) const;
 
+        /// A request a page's service worker makes (CEF gives it no browser): refused with reason
+        /// service_worker while service workers are off, else check() as a sub-resource.
+        [[nodiscard]] UrlVerdict checkServiceWorker(std::string_view url) const;
+
     private:
         [[nodiscard]] bool matches(std::vector<std::string> const& rules, std::string const& host) const;
         UrlPolicySettings _settings;
     };
+
+    /// Same scheme, host and port (false when either has no authority).
+    bool sameOrigin(std::string_view a, std::string_view b);
 
     /// Simple glob: '*' matches any run of characters (case-insensitive).
     bool globMatch(std::string_view pattern, std::string_view text);

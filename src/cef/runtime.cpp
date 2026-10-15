@@ -21,6 +21,8 @@
 #include "include/cef_client.h"
 #include "include/cef_devtools_message_observer.h"
 #include "include/cef_parser.h"
+#include "include/cef_request_context.h"
+#include "include/cef_request_context_handler.h"
 #include "include/cef_scheme.h"
 #include "include/cef_task.h"
 #include "include/cef_version.h"
@@ -94,6 +96,9 @@ namespace mbs::cef
             config.js_cancel_function = "mxlBrowserSourceQueryCancel";
             return config;
         }
+
+        // Child-process switch: BROWSER_SERVICE_WORKERS=false.
+        constexpr char const* kNoServiceWorkers = "mxl-no-service-workers";
 
         // window.mxlBrowserSource.post(obj) → the message router → PageObserver::onPagePost.
         constexpr char const* kPageApi =
@@ -322,6 +327,15 @@ namespace mbs::cef
                 }
             }
 
+            // Service workers off (BROWSER_SERVICE_WORKERS=false): renderers learn it from this switch.
+            void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> commandLine) override
+            {
+                if (!gSettings.serviceWorkers)
+                {
+                    commandLine->AppendSwitch(kNoServiceWorkers);
+                }
+            }
+
             void OnContextInitialized() override
             {
                 CefRegisterSchemeHandlerFactory("https", "templates.local", new TemplatesFactory(gSettings.templatesDir, "/usr/local/share/mxl-browser-source/templates"));
@@ -329,7 +343,11 @@ namespace mbs::cef
             }
 
             // Renderer process: the page API and the router's renderer side.
-            void OnWebKitInitialized() override { _router = CefMessageRouterRendererSide::Create(routerConfig()); }
+            void OnWebKitInitialized() override
+            {
+                _router = CefMessageRouterRendererSide::Create(routerConfig());
+                _hideServiceWorkers = CefCommandLine::GetGlobalCommandLine()->HasSwitch(kNoServiceWorkers);
+            }
 
             void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override
             {
@@ -339,6 +357,13 @@ namespace mbs::cef
                 }
                 CefRefPtr<CefV8Value> result;
                 CefRefPtr<CefV8Exception> exception;
+                if (_hideServiceWorkers)
+                {
+                    // Before any script of the page: `'serviceWorker' in navigator` is false, as in a
+                    // browser without service workers, so pages take their path without one. The
+                    // browser process refuses every request of a worker as well (SPEC §14.3).
+                    context->Eval("delete Navigator.prototype.serviceWorker;", CefString(), 0, result, exception);
+                }
                 context->Eval(kPageApi, CefString(), 0, result, exception);
             }
 
@@ -357,6 +382,7 @@ namespace mbs::cef
 
         private:
             CefRefPtr<CefMessageRouterRendererSide> _router;
+            bool _hideServiceWorkers = false;
             IMPLEMENT_REFCOUNTING(App);
         };
 
@@ -563,6 +589,23 @@ namespace mbs::cef
         {
             std::lock_guard lock{mutex};
             return policy.check(url, topLevel);
+        }
+
+        /// The URL policy for one resource request (IO thread); refused ones are counted.
+        /// `worker`: a request a service worker makes, which CEF gives no browser.
+        [[nodiscard]] bool admit(CefRefPtr<CefRequest> const& request, bool worker) const
+        {
+            auto const url = request->GetURL().ToString();
+            ops::UrlVerdict verdict;
+            {
+                std::lock_guard lock{mutex};
+                verdict = worker ? policy.checkServiceWorker(url) : policy.check(url, request->GetResourceType() == RT_MAIN_FRAME);
+            }
+            if (!verdict.allowed)
+            {
+                observer.onNavigationBlocked(url, verdict.reason);
+            }
+            return verdict.allowed;
         }
 
         CefRefPtr<CefBrowserHost> host() const { return browser ? browser->GetHost() : nullptr; }
@@ -880,6 +923,16 @@ namespace mbs::cef
                 impl->observer.onNavigationBlocked(url, verdict.reason);
                 return true;
             }
+            // Service workers on: a worker that outlives its page after a navigation to another
+            // site keeps running in the old renderer, and CEF finds no request context handler for
+            // its requests there any more (lab, CEF 144): they went out unchecked. Leaving an
+            // origin stops all workers (the domain must be enabled first; lab: the worker stopped
+            // at the navigation); one of the new origin starts again at its next event.
+            if (gSettings.serviceWorkers && frame->IsMain() && !ops::sameOrigin(frame->GetURL().ToString(), url))
+            {
+                browser->GetHost()->ExecuteDevToolsMethod(impl->nextDevToolsId.fetch_add(1), "ServiceWorker.enable", nullptr);
+                browser->GetHost()->ExecuteDevToolsMethod(impl->nextDevToolsId.fetch_add(1), "ServiceWorker.stopAllWorkers", nullptr);
+            }
             return false;
         }
 
@@ -892,19 +945,7 @@ namespace mbs::cef
         cef_return_value_t OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback>) override
         {
             auto impl = _impl.lock();
-            if (!impl)
-            {
-                return RV_CANCEL;
-            }
-            bool const topLevel = request->GetResourceType() == RT_MAIN_FRAME;
-            auto const url = request->GetURL().ToString();
-            auto const verdict = impl->check(url, topLevel);
-            if (!verdict.allowed)
-            {
-                impl->observer.onNavigationBlocked(url, verdict.reason);
-                return RV_CANCEL;
-            }
-            return RV_CONTINUE;
+            return impl && impl->admit(request, false) ? RV_CONTINUE : RV_CANCEL;
         }
 
         void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status, int, CefString const&) override
@@ -1073,6 +1114,36 @@ namespace mbs::cef
         IMPLEMENT_REFCOUNTING(Client);
     };
 
+    // The browser's request context (it shares the global context's storage). CEF gives the
+    // requests of a page's service worker no browser and no client: they reach this handler and
+    // not Client's (SPEC §14.3): fetch(), importScripts() and the fetches of its fetch events, also
+    // when the worker starts for a navigation (lab, CEF 144). Only the worker's own script (same
+    // origin as the page that registered it) reaches neither.
+    class WorkerRequests : public CefRequestContextHandler, public CefResourceRequestHandler
+    {
+    public:
+        explicit WorkerRequests(std::weak_ptr<Browser::Impl> impl)
+            : _impl(std::move(impl))
+        {
+        }
+
+        CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>, CefRefPtr<CefRequest>, bool, bool,
+            CefString const&, bool&) override
+        {
+            return browser ? nullptr : this; // with a browser, Client's handler had it
+        }
+
+        cef_return_value_t OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback>) override
+        {
+            auto impl = _impl.lock();
+            return impl && impl->admit(request, true) ? RV_CONTINUE : RV_CANCEL;
+        }
+
+    private:
+        std::weak_ptr<Browser::Impl> _impl;
+        IMPLEMENT_REFCOUNTING(WorkerRequests);
+    };
+
     Browser::Browser(BrowserSettings settings, PageObserver& observer, ops::UrlPolicy policy)
         : _impl(std::make_shared<Impl>(std::move(settings), observer, std::move(policy)))
     {
@@ -1098,7 +1169,8 @@ namespace mbs::cef
                 settings.background_color = impl->settings.background;
                 url = impl->settings.url;
             }
-            CefBrowserHost::CreateBrowser(info, impl->client, url, settings, nullptr, nullptr);
+            auto context = CefRequestContext::CreateContext(CefRequestContext::GetGlobalContext(), new WorkerRequests(impl));
+            CefBrowserHost::CreateBrowser(info, impl->client, url, settings, nullptr, context);
         });
     }
 

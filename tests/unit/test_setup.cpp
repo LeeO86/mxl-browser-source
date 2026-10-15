@@ -88,3 +88,21 @@ TEST_CASE("Chromium's histogram directory is per instance, and the link to it is
     CHECK(fs::is_symlink(link));
     fs::remove_all(root);
 }
+
+TEST_CASE("service-worker registrations are removed from a profile, its Cache Storage stays")
+{
+    fs::path const profile = fs::temp_directory_path() / ("mbs-profile-" + std::to_string(::getpid()));
+    fs::path const workers = profile / "Default" / "Service Worker";
+    CHECK(removeServiceWorkerRegistrations(profile.string()).empty()); // no profile yet
+    for (auto const* part : {"Database", "ScriptCache", "CacheStorage"})
+    {
+        fs::create_directories(workers / part);
+        std::ofstream(workers / part / "data") << "x";
+    }
+    CHECK(removeServiceWorkerRegistrations(profile.string()) == std::vector<std::string>{"Database", "ScriptCache"});
+    CHECK_FALSE(fs::exists(workers / "Database"));
+    CHECK_FALSE(fs::exists(workers / "ScriptCache"));
+    CHECK(fs::exists(workers / "CacheStorage" / "data"));
+    CHECK(removeServiceWorkerRegistrations(profile.string()).empty()); // nothing left to remove: nothing to log
+    fs::remove_all(profile);
+}

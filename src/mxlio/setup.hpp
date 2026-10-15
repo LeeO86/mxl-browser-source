@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace mbs::mxlio
 {
@@ -43,4 +44,9 @@ namespace mbs::mxlio
     /// Makes `link` a symbolic link to `target`, a fresh empty directory of this user. False with
     /// `error` naming the step that failed (a `target` of another user is never removed).
     bool linkToFreshDir(std::string const& link, std::string const& target, std::string& error);
+
+    /// Removes the service-worker registrations of a Chromium profile (`<profile>/Default/Service
+    /// Worker/Database` and `ScriptCache`), keeping the Cache Storage pages use without workers
+    /// (SPEC §14.3). The parts removed, empty when there were none.
+    std::vector<std::string> removeServiceWorkerRegistrations(std::string const& profile);
 }

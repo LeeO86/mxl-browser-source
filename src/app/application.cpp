@@ -470,6 +470,20 @@ namespace mbs::app
             {
                 fs::remove(_cachePath + "/" + lock, ec);
             }
+            // Service workers off: the ones registered while they were on would still answer their
+            // pages' requests (from their caches; their own requests are refused, SPEC §14.3).
+            if (!_cfg.serviceWorkers)
+            {
+                if (auto const removed = mxlio::removeServiceWorkerRegistrations(_cachePath); !removed.empty())
+                {
+                    std::string parts;
+                    for (auto const& part : removed)
+                    {
+                        parts += (parts.empty() ? "" : ",") + part;
+                    }
+                    log::info("service_workers_removed", {{"parts", parts}});
+                }
+            }
         }
         else
         {
@@ -530,6 +544,7 @@ namespace mbs::app
         }
         rs.webauthn = _cfg.webauthn;
         rs.webgpu = _cfg.webgpu;
+        rs.serviceWorkers = _cfg.serviceWorkers;
         rs.extraFlags = _cfg.chromiumFlagsAppend;
         rs.templatesDir = _cfg.templatesDir;
         rs.ografPackagesDir = _ografLibrary->packagesDir();
@@ -1272,6 +1287,7 @@ namespace mbs::app
         // OGraf mode: the library only, unless BROWSER_OGRAF_NETWORK says any or names hosts (docs/ograf.md §5).
         policy.localOnly = mode == "ograf" && !_cfg.ografNetworkAny;
         policy.localExtra = _cfg.ografNetworkHosts;
+        policy.serviceWorkers = _cfg.serviceWorkers;
         return ops::UrlPolicy(policy);
     }
 

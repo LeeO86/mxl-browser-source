@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1
+
+- **Service and shared workers and the URL policy** (SPEC §14.3). CEF gives the requests of a service or shared worker no browser, so they reached none of the URL policy's handlers: a page could register a service worker that fetched loopback, the function's own ports, the registry or hosts outside `BROWSER_URL_ALLOW`, and in mode `ograf` anything despite `BROWSER_OGRAF_NETWORK=local` (lab, 1.3.0: all went through, `navigation_blocked_total` did not count them). The 1.3.0 release notes listed this as a known limitation.
+  - New setting `BROWSER_SERVICE_WORKERS` (default `false`, restart). Off, renderers remove `navigator.serviceWorker` before the page runs (pages, iframes and cross-origin iframes take their path without one), every request of a service or shared worker is refused and counted as `navigation_blocked_total{reason="service_worker"}` (a shared worker cannot fetch), and a persistent profile loses the registrations made while they were on (`Service Worker/Database` and `ScriptCache`; Cache Storage stays; `service_workers_removed` is logged only when something was removed). YouTube (`youtube.html`, picture and sound) and the OGraf examples work as before.
+  - On, the browser has its own request context (sharing the global context's storage) whose `CefRequestContextHandler` applies the same policy to every request of a service or shared worker: `fetch()`, `importScripts()` and the fetches of fetch events, also when the worker starts for a navigation, counted with the usual reasons. A worker that outlived its page after a navigation to another site reached no handler (lab); a main-frame navigation that leaves an origin now stops all service workers (DevTools `ServiceWorker.stopAllWorkers`). The worker's own same-origin script still reaches no handler: use `true` only with a NetworkPolicy egress fence.
+  - Tests: unit tests for the setting, `checkServiceWorker`, `sameOrigin` and the profile cleanup; `templates/service-worker.html` and `tests/integration/sw_test.py` in CI (the default container; a second one off, with a cross-origin iframe and a shared worker, and on).
+
 ## 1.3.0
 
 - EBU OGraf v1 (`docs/ograf.md`, SPEC §4.6):

@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- Service workers (SPEC §14.3, §17): reports through window.mxlBrowserSource.post whether the
+     page and an iframe see navigator.serviceWorker. With BROWSER_SERVICE_WORKERS=false (default)
+     neither does, in a secure context too; a worker's requests would bypass no URL policy anyway. -->
+<html><head><meta charset="utf-8"><title>service-worker</title>
+<style>html,body{margin:0;height:100%;background:#102030;color:#fff;font:40px "DejaVu Sans",sans-serif;overflow:hidden}</style>
+</head><body><div id="out">service-worker</div>
+<script>
+const frame = document.createElement("iframe");
+document.body.appendChild(frame);
+const result = {
+  serviceWorker: "serviceWorker" in navigator,
+  iframe: "serviceWorker" in frame.contentWindow.navigator,
+  secure: window.isSecureContext,
+};
+document.getElementById("out").textContent = JSON.stringify(result);
+const post = () => { if (window.mxlBrowserSource) window.mxlBrowserSource.post({serviceWorkers: result}); };
+post();
+setInterval(post, 500); // for a listener that connects after the load
+</script></body></html>

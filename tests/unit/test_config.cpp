@@ -84,6 +84,13 @@ TEST_CASE("WebAuthn is hidden from pages unless enabled")
     CHECK(errorKey({{"BROWSER_WEBAUTHN", "maybe"}}) == "BROWSER_WEBAUTHN");
 }
 
+TEST_CASE("service workers are off unless enabled")
+{
+    CHECK_FALSE(load({}, {}, "host").config.serviceWorkers);
+    CHECK(load({{"BROWSER_SERVICE_WORKERS", "true"}}, {}, "host").config.serviceWorkers);
+    CHECK(errorKey({{"BROWSER_SERVICE_WORKERS", "sometimes"}}) == "BROWSER_SERVICE_WORKERS");
+}
+
 TEST_CASE("frame-loop settings: pipeline, real-time threads, conversion threads, WebGPU")
 {
     auto const d = load({}, {}, "host").config;

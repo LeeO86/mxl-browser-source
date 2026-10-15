@@ -206,4 +206,20 @@ namespace mbs::mxlio
         }
         return true;
     }
+
+    std::vector<std::string> removeServiceWorkerRegistrations(std::string const& profile)
+    {
+        namespace fs = std::filesystem;
+        std::vector<std::string> removed;
+        for (auto const* part : {"Database", "ScriptCache"})
+        {
+            std::error_code ec;
+            auto const path = fs::path(profile) / "Default" / "Service Worker" / part;
+            if (fs::exists(path, ec) && fs::remove_all(path, ec) > 0 && !ec)
+            {
+                removed.emplace_back(part);
+            }
+        }
+        return removed;
+    }
 }

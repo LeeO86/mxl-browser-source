@@ -210,6 +210,22 @@ namespace mbs::ops
         return false;
     }
 
+    bool sameOrigin(std::string_view a, std::string_view b)
+    {
+        auto const x = parseUrl(a);
+        auto const y = parseUrl(b);
+        return x && y && x->scheme == y->scheme && x->host == y->host && x->port == y->port;
+    }
+
+    UrlVerdict UrlPolicy::checkServiceWorker(std::string_view url) const
+    {
+        if (!_settings.serviceWorkers)
+        {
+            return {false, "service_worker"};
+        }
+        return check(url, false);
+    }
+
     UrlVerdict UrlPolicy::check(std::string_view url, bool topLevel) const
     {
         auto const colon = url.find(':');
