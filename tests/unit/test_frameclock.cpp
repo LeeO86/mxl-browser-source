@@ -37,7 +37,11 @@ TEST_CASE("frame clock: a TAI step moves the phase; past the threshold it locks 
     // 0.6 ms: measured, not acted on.
     CHECK(clock.poll(12 * kP, kOffset + 600'000, 11 * kP) == 0);
     CHECK(clock.stats().phaseErrorNs == 600'000);
-    // 2.5 ms: locked again at the next grain.
+    // 2.5 ms, staying: locked again once it was seen on kDriftPolls polls in a row.
+    for (unsigned i = 1; i < FrameClock::kDriftPolls; ++i)
+    {
+        CHECK(clock.poll(13 * kP, kOffset + 2'500'000, 12 * kP) == 0);
+    }
     auto const again = clock.poll(13 * kP, kOffset + 2'500'000, 12 * kP);
     CHECK(again == 13 * kP + kPhase);
     clock.anchored(again, again + 10'000, kOffset + 2'500'000);
@@ -83,4 +87,35 @@ TEST_CASE("frame clock: an anchor that never answers is given up after a second"
     CHECK(clock.poll(2 * kP, kOffset, kP) != 0);
     CHECK(clock.poll(3 * kP, kOffset, 2 * kP) == 0);
     CHECK(clock.poll(60 * kP, kOffset, kP + 1'100'000'000) == 60 * kP + kPhase);
+}
+
+TEST_CASE("frame clock: one offset reading past the threshold (a preemption) does not relock")
+{
+    FrameClock clock(kP, kPhase, 2'000'000);
+    auto const target = clock.poll(2 * kP, kOffset, kP);
+    clock.anchored(target, target, kOffset);
+    for (std::uint64_t k = 3; k < 30; ++k)
+    {
+        // Every fourth reading is 5 ms off, the others are right: never kDriftPolls in a row.
+        auto const offset = k % 4 == 0 ? kOffset + 5'000'000 : kOffset;
+        CHECK(clock.poll(k * kP, offset, (k - 1) * kP) == 0);
+    }
+    CHECK(clock.stats().locks[static_cast<std::size_t>(LockReason::Drift)] == 0);
+}
+
+TEST_CASE("frame clock: an anchor skipped before the browser exists is not late and is asked again")
+{
+    FrameClock clock(kP, kPhase, 1'000'000);
+    for (std::uint64_t k = 2; k < 6; ++k)
+    {
+        auto const target = clock.poll(k * kP, kOffset, (k - 1) * kP);
+        CHECK(target == k * kP + kPhase);
+        clock.skipped();
+    }
+    CHECK(clock.stats().lateAnchors == 0);
+    CHECK_FALSE(clock.stats().locked);
+    auto const target = clock.poll(7 * kP, kOffset, 6 * kP);
+    clock.anchored(target, target, kOffset);
+    CHECK(clock.stats().locks[static_cast<std::size_t>(LockReason::Start)] == 1);
+    CHECK(clock.stats().lateAnchors == 0);
 }

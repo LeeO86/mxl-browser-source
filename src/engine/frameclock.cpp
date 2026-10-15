@@ -39,7 +39,10 @@ namespace mbs::engine
             // change of the offset since then. Its distance from the wanted grid T(n) + φ:
             auto const anchor = static_cast<std::int64_t>(_called - _target);
             _stats.phaseErrorNs = wrap(anchor + (offsetNs - _calledOffset));
-            if (static_cast<std::uint64_t>(std::llabs(_stats.phaseErrorNs)) > _threshold && !_pending && !_inFlight)
+            // One reading past the threshold can be a preemption inside monotonicOffsetNs(); a real
+            // step or slew stays.
+            _overThreshold = static_cast<std::uint64_t>(std::llabs(_stats.phaseErrorNs)) > _threshold ? _overThreshold + 1 : 0;
+            if (_overThreshold >= kDriftPolls && !_pending && !_inFlight)
             {
                 _pending = true;
                 _pendingReason = LockReason::Drift;
@@ -82,10 +85,22 @@ namespace mbs::engine
         _target = targetNs;
         _called = calledNs;
         _calledOffset = offsetNs;
+        _overThreshold = 0;
         _stats.locked = true;
         _stats.anchorErrorNs = static_cast<std::int64_t>(calledNs - targetNs);
         _stats.phaseErrorNs = wrap(_stats.anchorErrorNs);
         ++_stats.locks[static_cast<std::size_t>(_inFlightReason)];
+    }
+
+    void FrameClock::skipped()
+    {
+        std::lock_guard lock{_mutex};
+        _inFlight = false;
+        if (!_pending)
+        {
+            _pending = true;
+            _pendingReason = _inFlightReason;
+        }
     }
 
     FrameClockStats FrameClock::stats() const

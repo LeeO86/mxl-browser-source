@@ -573,7 +573,7 @@ namespace mbs::app
         _engine->setAnchorFrameClock([this](std::uint64_t target) {
             if (!_browserReady.load())
             {
-                _engine->frameClockAnchored(target, 0);
+                _engine->frameClockSkipped(); // no browser yet: not a late anchor
                 return;
             }
             _browser->anchorFrameClock(

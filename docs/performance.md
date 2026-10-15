@@ -88,7 +88,7 @@ Raw data (lab host) in `~/mxl-lab/ograf/m7/`: `trace/`, `repro/`, `ab/` (NUMA pi
 | YouTube 1080p25 | **internal** | **50.03 %** | – | – | **0 and 0 of 3 137** | 0.0 / 0.1 ms |
 
 - **External BeginFrames.** CEF 144 gives each BeginFrame the call time as frame time, a null deadline and a 60 Hz interval (CEF #4311). A `<video>` therefore picks the wrong frame often: Chromium drops 13 % of a 50p clip, and 15 % of fresh grains repeat content. The 25p clip shows about 340 repeats per 2 minutes on held grains (paints that never came).
-- **Internal clock.** No content error in 18 814 grains of 50p, exact 2:1 for 25p, and the right 59.94 → 50 pattern. The function's phase error stays ≤ 0.0002 ms in every run, with 0 late anchors and 0 drift re-anchors. The rAF timestamps sit within ±0.07 ms of T(k) + φ (spread 0.1 ms, against 1.2–5.7 ms of dispatch jitter for external BeginFrames).
+- **Internal clock.** No content error in 18 814 grains of 50p, exact 2:1 for 25p, and the right 59.94 → 50 pattern. The function's phase error stays ≤ 0.0002 ms in every run, with 0 late anchors and 0 drift re-anchors. (That phase error is modelled from the anchor and the TAI − monotonic offset, not measured; the rAF timestamps below are the measurement.) The rAF timestamps sit within ±0.07 ms of T(k) + φ (spread 0.1 ms, against 1.2–5.7 ms of dispatch jitter for external BeginFrames).
 - **Unanswered BeginFrames** (external only; with the internal clock the function sends none): 50p 24 % (the pipeline turns them into 13.4 % held), 59.94p 9.6 %.
 - **`nvidia-smi` polled every second:**
   - external 50p: held 12.2 % (unchanged), but unanswered BeginFrames rise from 24 % to 45 %;

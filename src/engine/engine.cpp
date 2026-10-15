@@ -144,6 +144,14 @@ namespace mbs::engine
         record(TraceKind::Anchor, calledNs != 0 ? calledNs : _clock.nowNs(), targetNs, calledNs);
     }
 
+    void Engine::frameClockSkipped()
+    {
+        if (_frameClock)
+        {
+            _frameClock->skipped();
+        }
+    }
+
     void Engine::relockFrameClock(LockReason reason)
     {
         if (_frameClock)

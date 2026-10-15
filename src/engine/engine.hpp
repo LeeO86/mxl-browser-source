@@ -176,6 +176,8 @@ namespace mbs::engine
         void setAnchorFrameClock(std::function<void(std::uint64_t targetNs)> anchor);
         /// UI thread: the anchor for `targetNs` ran at TAI `calledNs` (0: too late, not run).
         void frameClockAnchored(std::uint64_t targetNs, std::uint64_t calledNs);
+        /// The anchor could not run because there is no browser yet: not counted as late, asked again.
+        void frameClockSkipped();
         /// A new compositor timebase may have come with a new renderer view: anchor again.
         void relockFrameClock(LockReason reason);
         /// Starts the converter and the tick thread.

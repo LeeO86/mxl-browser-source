@@ -37,7 +37,9 @@ namespace mbs::app
             return static_cast<std::uint64_t>(U128{index} * 48000U * static_cast<std::uint64_t>(_rate.denominator) / static_cast<std::uint64_t>(_rate.numerator));
         }
 
-        /// TAI − CLOCK_MONOTONIC, from a monotonic reading on each side of the TAI one.
+        /// TAI − CLOCK_MONOTONIC, from a monotonic reading on each side of the TAI one. Of three
+        /// tries the tightest pair wins: a preemption between the reads skews one try by up to half
+        /// its length, and would read as frame clock drift.
         [[nodiscard]] std::int64_t monotonicOffsetNs() const override
         {
             auto const mono = [] {
@@ -45,10 +47,20 @@ namespace mbs::app
                 clock_gettime(CLOCK_MONOTONIC, &ts);
                 return static_cast<std::int64_t>(ts.tv_sec) * 1'000'000'000LL + ts.tv_nsec;
             };
-            auto const before = mono();
-            auto const tai = static_cast<std::int64_t>(mxlGetTime());
-            auto const after = mono();
-            return tai - (before + (after - before) / 2);
+            std::int64_t best = 0;
+            std::int64_t bestWidth = -1;
+            for (int i = 0; i < 3; ++i)
+            {
+                auto const before = mono();
+                auto const tai = static_cast<std::int64_t>(mxlGetTime());
+                auto const after = mono();
+                if (bestWidth < 0 || after - before < bestWidth)
+                {
+                    bestWidth = after - before;
+                    best = tai - (before + (after - before) / 2);
+                }
+            }
+            return best;
         }
 
         void sleepUntil(std::uint64_t taiNs) override

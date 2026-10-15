@@ -11,6 +11,12 @@
 //
 // Pure logic, no CEF: the tick thread polls it once per grain and gets the TAI time at which the
 // UI thread should call SetWindowlessFrameRate; the UI thread reports when it did.
+//
+// The phase error is modelled, not measured: it is the anchor's call time against its target plus
+// the change of TAI − CLOCK_MONOTONIC since then. Nothing reads the time of Chromium's actual
+// BeginFrames; a compositor that moved its timebase on its own is not seen (a page load relocks
+// for that reason). A single offset reading can be off by a preemption between its clock reads,
+// so only an error past the threshold on kDriftPolls polls in a row relocks.
 #pragma once
 
 #include <array>
@@ -33,7 +39,7 @@ namespace mbs::engine
         std::array<std::uint64_t, 3> locks{}; // anchors made, by LockReason
         std::uint64_t lateAnchors = 0;        // the UI thread reached the anchor time too late (not anchored, tried again)
         std::int64_t anchorErrorNs = 0;       // the newest anchor: call time − target
-        std::int64_t phaseErrorNs = 0;        // now: where Chromium's BeginFrames fall against T(n) + φ
+        std::int64_t phaseErrorNs = 0;        // now: where Chromium's BeginFrames should fall against T(n) + φ (modelled, see above)
     };
 
     class FrameClock
@@ -53,6 +59,9 @@ namespace mbs::engine
         /// UI thread: the anchor for `targetNs` ran at TAI `calledNs` (0: it was too late and did
         /// not run), with TAI − CLOCK_MONOTONIC = `offsetNs` then.
         void anchored(std::uint64_t targetNs, std::uint64_t calledNs, std::int64_t offsetNs);
+        /// The anchor did not run because there is no browser yet (or any more): not late, not
+        /// counted; it is asked for again.
+        void skipped();
 
         [[nodiscard]] FrameClockStats stats() const;
         [[nodiscard]] std::uint64_t phaseNs() const { return _phase; }
@@ -62,6 +71,11 @@ namespace mbs::engine
 
     private:
         static constexpr std::uint64_t kInFlightTimeoutNs = 1'000'000'000; // an anchor that never reported (browser gone)
+
+    public:
+        static constexpr unsigned kDriftPolls = 3; // polls in a row past the threshold before a drift relock
+
+    private:
 
         std::uint64_t const _period;
         std::uint64_t const _phase;
@@ -76,6 +90,7 @@ namespace mbs::engine
         std::uint64_t _target = 0;     // the newest anchor's target and call time (TAI)
         std::uint64_t _called = 0;
         std::int64_t _calledOffset = 0; // TAI − CLOCK_MONOTONIC at the call
+        unsigned _overThreshold = 0;    // polls in a row with the phase error past the threshold
         FrameClockStats _stats;
     };
 }
