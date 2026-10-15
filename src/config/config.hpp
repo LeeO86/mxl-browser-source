@@ -122,6 +122,12 @@ namespace mbs::config
         bool persistentProfile = false;
         bool webauthn = false;
         std::string templatesDir;
+        std::string ografDir;
+        int ografUploadMaxMb = 256;
+        int ografActionTimeoutMs = 10000;
+        bool ografNetworkAny = false;               // BROWSER_OGRAF_NETWORK=any
+        std::vector<std::string> ografNetworkHosts; // extra host globs; empty with !any = local
+        std::vector<std::string> ografCorsOrigins;
         std::string fontsDir;
         std::string caDir = "/etc/mxl-browser-source/ca";
         std::string httpsProxy;

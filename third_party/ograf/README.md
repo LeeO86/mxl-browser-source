@@ -1,0 +1,1 @@
+EBU OGraf v1 JSON schemas (MIT) from https://github.com/ebu/ograf at 164fb10bb361e249bc0cd915b0af3d6ed70083d8 (v1/specification/json-schemas). Embedded in the binary and resolved by their $id, so validation needs no network.

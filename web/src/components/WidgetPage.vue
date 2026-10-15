@@ -6,10 +6,18 @@
 // app. It posts {type: "widget-ready"} and {type: "widget-size", w, h} to the page that frames it.
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import PreviewInteract from "./PreviewInteract.vue";
+import GraphicsTab from "./GraphicsTab.vue";
 import TokenDialog from "./TokenDialog.vue";
 import { api, live, startEvents } from "../api.js";
 
-const theme = new URLSearchParams(location.search).get("theme");
+const query = new URLSearchParams(location.search);
+const theme = query.get("theme");
+// /widget/ograf[?layers=1,2,3]: the Graphics tab's layers and form, without upload or delete.
+const widgetId = location.pathname.slice("/widget/".length);
+const layerFilter = (query.get("layers") || "")
+  .split(",")
+  .map((x) => Number(x))
+  .filter((n) => Number.isInteger(n) && n >= 1 && n <= 8);
 if (theme) document.documentElement.dataset.theme = theme;
 
 const root = ref(null);
@@ -49,7 +57,8 @@ onUnmounted(() => observer?.disconnect());
 
 <template>
   <div ref="root" class="widget-root">
-    <PreviewInteract v-if="live.info" fill />
+    <GraphicsTab v-if="live.info && widgetId === 'ograf'" widget :layers="layerFilter" />
+    <PreviewInteract v-else-if="live.info" fill />
     <div v-else class="empty">{{ error || "Waiting for the browser source…" }}</div>
     <TokenDialog />
   </div>

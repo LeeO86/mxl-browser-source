@@ -1,0 +1,29 @@
+{
+    "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+    "name": "Minimal Test Graphic",
+    "description": "This Graphic includes the bare minimum required to be a valid OGraf Graphic. It displays a 'Hello World!' message.",
+    "id": "minimal-example",
+    "main": "graphic.mjs",
+    "supportsRealTime": true,
+    "supportsNonRealTime": false,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "default": "Hello World!",
+                "gddType": "single-line",
+                "hidden": true
+            }
+        }
+    },
+    "thumbnails": [
+        {
+            "file": "thumbnails/1280x720.png",
+            "resolution": {
+                "width": 1280,
+                "height": 720
+            }
+        }
+    ]
+}

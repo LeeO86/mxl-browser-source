@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "mbs-probe",
+  "name": "Probe (integration test)",
+  "description": "Reports every call through window.mxlBrowserSource.post; a full-raster box per step.",
+  "main": "graphic.mjs",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 2,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string", "default": "probe" },
+      "color": { "type": "string", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$", "default": "#ff0000" }
+    }
+  },
+  "customActions": [
+    { "id": "fetch", "name": "Fetch a URL", "schema": { "type": "object", "properties": { "url": { "type": "string" } } } }
+  ]
+}

@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>OGraf renderer</title>
+<!-- mxl-browser-source OGraf renderer (docs/ograf.md §3): 8 layers, one same-origin iframe each,
+     layer 8 on top. The function calls window.ografRenderer.call() over DevTools Runtime.evaluate
+     (awaitPromise) and keeps the layer state itself. -->
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; color-scheme: normal; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; visibility: hidden; color-scheme: normal; }
+</style>
+</head>
+<body>
+<script>
+(() => {
+  'use strict';
+  const LAYERS = 8;
+  const DISPOSE_MS = 2000;
+  const layers = [];
+  for (let n = 1; n <= LAYERS; n++) {
+    const frame = document.createElement('iframe');
+    frame.style.zIndex = String(n);
+    frame.setAttribute('allow', 'autoplay');
+    frame.setAttribute('aria-label', 'Layer ' + n);
+    frame.src = 'about:blank';
+    document.body.appendChild(frame);
+    layers[n] = { frame, ready: null, generation: 0 };
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // An OGraf ReturnPayload as plain JSON; undefined means { statusCode: 200 } (spec).
+  function payload(result) {
+    if (result === undefined || result === null) return { statusCode: 200 };
+    const out = JSON.parse(JSON.stringify(result));
+    if (typeof out !== 'object' || Array.isArray(out)) return { statusCode: 200, result: out };
+    if (typeof out.statusCode !== 'number') out.statusCode = 200;
+    return out;
+  }
+
+  function api(layer) {
+    const win = layer.frame.contentWindow;
+    return win && win.ografLayer;
+  }
+
+  // A fresh layer document: its own globals, CSS, fonts and custom element registry.
+  function freshDocument(layer) {
+    const generation = ++layer.generation;
+    return new Promise((resolve) => {
+      layer.frame.onload = () => { if (layer.generation === generation) resolve(); };
+      layer.frame.src = '/renderer/layer.html?g=' + generation;
+    });
+  }
+
+  async function dispose(layer) {
+    const a = api(layer);
+    if (a && a.element) {
+      try {
+        await Promise.race([a.dispose(), sleep(DISPOSE_MS)]);
+      } catch (e) {
+        console.warn('ograf: dispose() failed', e);
+      }
+    }
+    layer.ready = null;
+    layer.generation++;
+    layer.frame.onload = null;
+    layer.frame.style.visibility = 'hidden';
+    layer.frame.src = 'about:blank';
+  }
+
+  window.ografRenderer = Object.freeze({
+    async call(n, method, args) {
+      const layer = layers[n];
+      if (!layer) throw new Error('no layer ' + n);
+      if (method === 'load') {
+        await dispose(layer);
+        const loading = (async () => {
+          await freshDocument(layer);
+          layer.frame.style.visibility = 'visible';
+          return api(layer).load(args);
+        })();
+        layer.ready = loading.then(() => undefined, () => undefined); // actions wait for load() (spec)
+        return payload(await loading);
+      }
+      if (method === 'dispose') {
+        if (layer.ready) await layer.ready;
+        await dispose(layer);
+        return { statusCode: 200 };
+      }
+      if (!layer.ready) throw new Error('layer ' + n + ' is empty');
+      await layer.ready;
+      return payload(await api(layer).action(method, args));
+    },
+  });
+})();
+</script>
+</body>
+</html>

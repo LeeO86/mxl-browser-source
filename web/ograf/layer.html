@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>OGraf layer</title>
+<!-- One OGraf layer (docs/ograf.md §3): imports the graphic's module, defines its custom element,
+     calls load() and forwards the actions. -->
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; color-scheme: normal; }
+</style>
+</head>
+<body>
+<script>
+'use strict';
+window.ografLayer = {
+  element: null,
+  async load(args) {
+    const module = await import(args.module);
+    const Graphic = module.default;
+    if (typeof Graphic !== 'function') {
+      throw new Error('the graphic module must default-export a class that extends HTMLElement');
+    }
+    customElements.define('ograf-graphic', Graphic);
+    const element = document.createElement('ograf-graphic');
+    document.body.appendChild(element);
+    this.element = element;
+    return element.load({ data: args.data, renderType: 'realtime', renderCharacteristics: args.renderCharacteristics });
+  },
+  async action(method, args) {
+    const element = this.element;
+    if (!element) throw new Error('nothing is loaded on this layer');
+    if (typeof element[method] !== 'function') throw new Error('the graphic has no ' + method + '()');
+    return element[method](args);
+  },
+  async dispose() {
+    const element = this.element;
+    this.element = null;
+    if (element && typeof element.dispose === 'function') await element.dispose({});
+    if (element) element.remove();
+  },
+};
+</script>
+</body>
+</html>

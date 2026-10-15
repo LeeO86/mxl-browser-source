@@ -23,6 +23,9 @@
 #include "config/document.hpp"
 #include "engine/engine.hpp"
 #include "nmos/ids.hpp"
+#include "ograf/layers.hpp"
+#include "ograf/library.hpp"
+#include "ograf/serverapi.hpp"
 #include "ops/httpserver.hpp"
 #include "ops/interact.hpp"
 #include "util/metrics.hpp"
@@ -41,6 +44,7 @@ namespace mbs::app
 {
     class MxlClock;
     class MxlOutputs;
+    class OgrafBridge;
 
     /// A startup failure with its exit code (75 or 78).
     struct StartupError : std::runtime_error
@@ -114,6 +118,15 @@ namespace mbs::app
 
         // page (application.cpp)
         void applySource(config::Source const& previous, config::Source const& next, bool navigate);
+        /// The page the browser shows for `source`: its url, or the OGraf renderer in mode ograf.
+        [[nodiscard]] static std::string shownUrl(config::Source const& source);
+        [[nodiscard]] ops::UrlPolicy urlPolicy(std::string const& mode) const;
+        /// 409 text when `next` leaves mode ograf while a layer holds a graphic and ?force=true is missing.
+        [[nodiscard]] std::optional<std::string> modeChangeRefused(config::Source const& previous, config::Source const& next, ops::HttpRequest const& req) const;
+        void ografPageLoaded();
+        void ografPageGone();
+        void ografChanged();
+        [[nodiscard]] std::string ografProblem() const;
         void injectAfterLoad();
         void queueTemplateCall(std::string const& js);
         void setPage(PageStatus status, std::string const& reason);
@@ -166,6 +179,15 @@ namespace mbs::app
         std::unique_ptr<ops::InteractHub> _interact;
         std::unique_ptr<ops::HttpServer> _http;
         std::unique_ptr<nmos::Node> _node;
+
+        // OGraf (docs/ograf.md).
+        std::unique_ptr<ograf::Library> _ografLibrary;
+        std::unique_ptr<OgrafBridge> _ografBridge;
+        std::unique_ptr<ograf::LayerSet> _ografLayers;
+        std::unique_ptr<ograf::ApiContext> _ografApi;
+        std::mutex _ografRestoreMutex;
+        std::thread _ografRestore;          // restores the layers after the renderer page loaded
+        bool _ografRestoredOnce = false;    // false: the first restore after the start (no steps)
 
         // Page state (guarded by _pageMutex).
         mutable std::mutex _pageMutex;

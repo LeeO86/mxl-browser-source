@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,6 +40,8 @@ namespace mbs::cef
         bool webauthn = false;            // BROWSER_WEBAUTHN
         std::vector<std::string> extraFlags; // BROWSER_CHROMIUM_FLAGS_APPEND, appended
         std::string templatesDir;         // served at https://templates.local/
+        std::string ografPackagesDir;     // served at https://ograf.local/packages/
+        std::map<std::string, std::string> ografPages; // path → HTML at https://ograf.local/ (the renderer)
     };
 
     struct BrowserSettings

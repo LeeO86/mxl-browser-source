@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 project(mxl-browser-source
     VERSION 1.2.0
     DESCRIPTION "MXL media function: a web page rendered offscreen with CEF"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 set(CMAKE_CXX_STANDARD 20)
@@ -28,6 +28,11 @@ add_compile_options(-Wall -Wextra)
 # (SPEC §17). The binary targets x86-64-v2; only src/convert/avx2.cpp
 # uses AVX2, through a target attribute, chosen at runtime.
 # ------------------------------------------------------------------
+# miniz (MIT, vendored) unpacks OGraf ZIP uploads; C, built without our warning flags.
+add_library(mbs-miniz STATIC third_party/miniz/miniz.c)
+target_compile_options(mbs-miniz PRIVATE -w)
+target_compile_definitions(mbs-miniz PUBLIC MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
+
 add_library(mbs-core STATIC
     src/audio/fifo.cpp
     src/audio/resampler.cpp
@@ -40,6 +45,12 @@ add_library(mbs-core STATIC
     src/engine/tick.cpp
     src/mxlio/setup.cpp
     src/nmos/ids.cpp
+    src/ograf/files.cpp
+    src/ograf/layers.cpp
+    src/ograf/library.cpp
+    src/ograf/manifest.cpp
+    src/ograf/serverapi.cpp
+    src/ograf/zip.cpp
     src/ops/httpserver.cpp
     src/ops/interact.cpp
     src/ops/keymap.cpp
@@ -52,7 +63,11 @@ add_library(mbs-core STATIC
     src/util/uuid.cpp
 )
 target_include_directories(mbs-core PUBLIC src third_party)
-target_link_libraries(mbs-core PUBLIC PkgConfig::SAMPLERATE Threads::Threads)
+target_link_libraries(mbs-core PUBLIC PkgConfig::SAMPLERATE Threads::Threads mbs-miniz)
+# jsoncons (BSL-1.0, header-only) only for the OGraf manifest check; its headers are not ours to lint.
+target_include_directories(mbs-core SYSTEM PRIVATE third_party/jsoncons/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
+include(cmake/EmbedSchemas.cmake)
+embed_ograf_schemas(${CMAKE_CURRENT_SOURCE_DIR}/third_party/ograf/json-schemas ${CMAKE_CURRENT_BINARY_DIR}/generated/ograf_schemas.hpp)
 target_compile_definitions(mbs-core PUBLIC MBS_VERSION="${PROJECT_VERSION}")
 
 if(MBS_BUILD_TESTS)
@@ -68,6 +83,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_ids.cpp
         tests/unit/test_interact.cpp
         tests/unit/test_keymap.cpp
+        tests/unit/test_ograf.cpp
         tests/unit/test_proc.cpp
         tests/unit/test_setup.cpp
         tests/unit/test_tick.cpp
@@ -75,6 +91,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_widgets.cpp
     )
     target_link_libraries(unit-tests PRIVATE mbs-core)
+    target_compile_definitions(unit-tests PRIVATE MBS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME unit-tests COMMAND unit-tests)
 endif()
 
@@ -121,6 +138,23 @@ if(MBS_WITH_CEF)
         COMMENT "Embedding the web UI"
     )
 
+    # The OGraf renderer pages (docs/ograf.md §3), plain HTML served at https://ograf.local/renderer/.
+    set(OGRAF_PAGE_HEADERS "")
+    foreach(page renderer layer)
+        string(SUBSTRING ${page} 0 1 first)
+        string(TOUPPER ${first} first)
+        string(SUBSTRING ${page} 1 -1 rest)
+        set(header ${CMAKE_CURRENT_BINARY_DIR}/generated/webui_ograf_${page}.hpp)
+        add_custom_command(
+            OUTPUT ${header}
+            COMMAND ${CMAKE_COMMAND} -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/web/ograf/${page}.html -DOUTPUT=${header} -DVAR=Ograf${first}${rest}Html
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake
+            DEPENDS web/ograf/${page}.html cmake/EmbedFile.cmake
+            COMMENT "Embedding the OGraf ${page} page"
+        )
+        list(APPEND OGRAF_PAGE_HEADERS ${header})
+    endforeach()
+
     # websocketpp (pulled in by nmos-cpp) does not parse as C++20.
     set(NMOS_CPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(NMOS_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -135,8 +169,10 @@ if(MBS_WITH_CEF)
         src/main.cpp
         src/app/api.cpp
         src/app/application.cpp
+        src/app/ografbridge.cpp
         src/nmos/node.cpp
         ${WEBUI_HEADER}
+        ${OGRAF_PAGE_HEADERS}
     )
     target_include_directories(mxl-browser-source PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
     target_compile_definitions(mxl-browser-source PRIVATE MBS_MXL_REVISION="${MBS_MXL_REVISION}" MBS_NMOS_CPP_REF="${MBS_NMOS_CPP_REF}")

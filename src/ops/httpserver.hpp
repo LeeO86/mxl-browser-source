@@ -25,6 +25,7 @@ namespace mbs::ops
         std::string query;  // after '?', undecoded
         std::vector<std::pair<std::string, std::string>> headers;
         std::string body;
+        std::string bodyFile; // set instead of body for a LargeBodies route (removed after the answer)
         std::string peer; // client IP address
         std::string raw;  // request line and headers as received (for a tunnel)
 
@@ -74,6 +75,15 @@ namespace mbs::ops
         std::size_t maxMessage = 64 * 1024; // larger messages close the connection (1009)
     };
 
+    /// Requests whose body the server writes to a file instead of memory (uploads). Every other
+    /// body stays limited to 4 MiB.
+    struct LargeBodies
+    {
+        std::function<bool(HttpRequest const&)> match;
+        std::size_t maxBytes = 0;
+        std::string dir; // must exist
+    };
+
     class HttpServer
     {
     public:
@@ -93,6 +103,8 @@ namespace mbs::ops
         /// Binds all interfaces on `port` (0 = any free port). False with `error` when it cannot.
         bool start(int port, std::string& error);
         void stop();
+        /// Before start().
+        void streamLargeBodies(LargeBodies large);
         [[nodiscard]] int port() const;
 
     private:

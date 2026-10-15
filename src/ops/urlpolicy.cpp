@@ -241,9 +241,13 @@ namespace mbs::ops
             return {false, "scheme"};
         }
         std::string const& host = parsed->host;
-        if (host == "templates.local")
+        if (host == "templates.local" || host == "ograf.local")
         {
             return {};
+        }
+        if (_settings.localOnly && !matches(_settings.localExtra, host))
+        {
+            return {false, "ograf_local"}; // OGraf mode, BROWSER_OGRAF_NETWORK=local (docs/ograf.md §5)
         }
         if (addressBytes(host))
         {

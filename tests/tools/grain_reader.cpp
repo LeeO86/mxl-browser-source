@@ -106,6 +106,34 @@ namespace
         return 0;
     }
 
+    // The head grain's whole payload (fill, and alpha in v210a) into a file: the lab compares a page
+    // and the same content as an OGraf graphic byte for byte (docs/ograf.md §12).
+    int dump(mxlInstance instance, std::string const& flow, std::string const& out)
+    {
+        auto* reader = openReader(instance, flow);
+        if (reader == nullptr)
+        {
+            std::fprintf(stderr, "no reader for %s\n", flow.c_str());
+            return 1;
+        }
+        mxlGrainInfo info{};
+        std::uint8_t* payload = nullptr;
+        if (mxlFlowReaderGetGrain(reader, headIndex(reader), 200'000'000, &info, &payload) != MXL_STATUS_OK || payload == nullptr)
+        {
+            std::fprintf(stderr, "no grain\n");
+            return 1;
+        }
+        std::FILE* file = std::fopen(out.c_str(), "wb");
+        bool const ok = file != nullptr && std::fwrite(payload, 1, info.grainSize, file) == info.grainSize;
+        if (file != nullptr)
+        {
+            std::fclose(file);
+        }
+        std::printf("dump %s bytes=%llu\n", ok ? "ok" : "failed", static_cast<unsigned long long>(info.grainSize));
+        mxlReleaseFlowReader(instance, reader);
+        return ok ? 0 : 1;
+    }
+
     // The first grain after the head grain whose luma at (x, y) differs from the head grain's by
     // more than 200 codes (interaction latency, SPEC §2.5).
     int change(mxlInstance instance, std::string const& flow, int width, int x, int y, int seconds)
@@ -355,9 +383,9 @@ int main(int argc, char** argv)
     auto const domain = arg(argc, argv, "--domain", "");
     int const width = std::stoi(arg(argc, argv, "--width", "1920"));
     int const seconds = std::stoi(arg(argc, argv, "--seconds", "20"));
-    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample" && mode != "change"))
+    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample" && mode != "change" && mode != "dump"))
     {
-        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample|change --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20]\n");
+        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample|change|dump --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20] [--out FILE]\n");
         return 2;
     }
     auto* instance = mxlCreateInstance(domain.c_str(), nullptr);
@@ -374,6 +402,10 @@ int main(int argc, char** argv)
     else if (mode == "change")
     {
         rc = change(instance, arg(argc, argv, "--flow", ""), width, std::stoi(arg(argc, argv, "--x", "0")), std::stoi(arg(argc, argv, "--y", "0")), seconds);
+    }
+    else if (mode == "dump")
+    {
+        rc = dump(instance, arg(argc, argv, "--flow", ""), arg(argc, argv, "--out", "/tmp/grain.bin"));
     }
     else if (mode == "sample")
     {

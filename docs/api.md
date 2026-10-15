@@ -47,8 +47,10 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 ```json
 {"url":"https://templates.local/blank.html","background":"transparent","zoom":1.0,"device_scale_factor":1.0,
- "css":"","js":"","user_agent_suffix":"","reload_interval_s":0,"audio":true}
+ "css":"","js":"","user_agent_suffix":"","reload_interval_s":0,"audio":true,"mode":"page"}
 ```
+
+`mode` is `page` (show `url`) or `ograf` (show the OGraf renderer, `docs/ograf.md`). Leaving `ograf` while a layer holds a graphic answers 409 unless the request has `?force=true` (also for a preset and a config import); in mode `ograf`, `navigate`, `back`, `forward` and the template API answer 409.
 
 `PUT /api/v1/source` replaces it, `PATCH /api/v1/source` merges the given fields; both apply at once and answer with the new document. `background` is `transparent` or `#RRGGBB`.
 
@@ -80,6 +82,29 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 `GET /api/v1/templates` → `{"files":["blank.html","bars.html", …]}` (served to the browser at `https://templates.local/<file>`).
 
+## OGraf (`docs/ograf.md`)
+
+The OGraf Server API v1 at `/ograf/v1` (EBU `server-api.yaml`): one renderer `main`, render targets `{"layer": 1…8}` (8 on top). Same token rule as `/api/v1`; CORS only for the origins in `BROWSER_OGRAF_CORS_ORIGINS`. Errors are RFC 7807 objects (`status`, `title`, `detail`); 550 = the graphic's method threw, 504 = it did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS`, 409 = no renderer page (mode `page`, loading or recovering).
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/ograf/v1` | name, description, version |
+| GET | `/ograf/v1/graphics` | `{"graphics":[GraphicListInfo + v_warnings, v_updatedAt, v_inUse:[{layer, current}]]}` |
+| GET, DELETE | `/ograf/v1/graphics/{id}` | manifest and metadata; `DELETE ?force=true` clears the layers that use it first |
+| GET | `/ograf/v1/graphics/{id}/thumbnail?file=…` | only files the manifest lists |
+| GET | `/ograf/v1/renderers`, `/ograf/v1/renderers/main` | status, renderCharacteristics, renderTargetSchema, the 8 targets |
+| GET | `/ograf/v1/renderers/main/target?renderTarget={"layer":n}` | one layer (JSON in the query, URL-encoded) |
+| PUT | `/ograf/v1/renderers/main/target/graphicInstance/clear` | `{"filters":[{renderTarget?, graphicId?, graphicInstanceId?}]}` |
+| POST | `…/graphicInstance/load` | `{"renderTarget":{"layer":n},"graphicId":"…","params":{"data":{…}}}` → `graphicInstanceId`, `statusCode` |
+| POST | `…/graphicInstance/playAction`, `stopAction`, `updateAction`, `customActions/{id}` | `{"renderTarget","graphicInstanceId","params"}` |
+
+Our own routes:
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/api/v1/ograf/graphics` | the ZIP as the body (`application/zip`, up to `BROWSER_OGRAF_UPLOAD_MAX_MB`): `200 {"package","graphics":[{id,name,replaced,warnings}]}`, or `422 {"error","manifests":[{path,id,errors,warnings}]}` and nothing is added; 413 when too large |
+| GET | `/api/v1/ograf/layers` | `{"layers":[{layer,state,graphicId,graphicName,package,graphicInstanceId,stepCount,data,step,pending,error}]}`; `state` is `empty`, `loading`, `ready`, `on`, `stopped` or `error` |
+
 ## Console
 
 `GET /api/v1/console` → `{"messages":[{"time":"2026-10-05T10:00:00Z","level":"error","message":"…","source":"…","line":12}]}` (last 200).
@@ -92,9 +117,9 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
 
 No token (the page asks for it). SPEC §10.6.
 
-`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.2.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
+`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.2.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.2.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
 
-`GET /widget/interaction[?theme=dark|light|transparent]` → the UI page with only the interaction window, `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
+`GET /widget/interaction[?theme=dark|light|transparent]` and `GET /widget/ograf[?theme=…&layers=1,2]` → the UI page with only the interaction window, or the Graphics tab's preview, layers and form (only the listed layers; no library, upload or delete; `docs/ograf.md` §8), `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
 
 ## NMOS
 
@@ -121,7 +146,7 @@ No token (the page asks for it). SPEC §10.6.
 
 ## WebSocket `/api/v1/events`
 
-Server → client only: `{"type":"status",…}` (4 Hz), `{"type":"dialog","kind":"alert","message":"…","result":"dismissed"}`, `{"type":"console",…}`, `{"type":"page","state":"loaded","url":"…","title":"…"}`, `{"type":"event","data":<object from window.mxlBrowserSource.post>}`.
+Server → client only: `{"type":"status",…}` (4 Hz), `{"type":"dialog","kind":"alert","message":"…","result":"dismissed"}`, `{"type":"console",…}`, `{"type":"page","state":"loaded","url":"…","title":"…"}`, `{"type":"event","data":<object from window.mxlBrowserSource.post>}`, `{"type":"ograf","layers":[…as /api/v1/ograf/layers…]}` (on connect and on every layer change).
 
 ## WebSocket `/api/v1/interact`
 

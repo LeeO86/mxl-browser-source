@@ -59,6 +59,7 @@ td { padding: .35rem .5rem; border-bottom: 1px solid var(--panel2); vertical-ali
 .pill.on { background: rgba(63, 185, 104, .15); color: var(--ok); }
 .pill.degraded { background: rgba(224, 168, 58, .15); color: var(--warn); }
 .pill.failed, .pill.off { background: rgba(224, 90, 78, .15); color: var(--bad); }
+.pill.onair { background: var(--bad); color: #fff; }
 .pill.init { background: rgba(132, 150, 168, .15); color: var(--muted); }
 
 .kv { display: grid; grid-template-columns: auto 1fr; gap: .15rem .8rem; font-size: .85rem; margin: 0; }
@@ -80,11 +81,15 @@ textarea.code.short { min-height: 60px; }
 fieldset.bare { border: 0; padding: 0; margin: 0; }
 fieldset.bare legend { font-size: .75rem; color: var(--muted); padding: 0; margin-bottom: .3rem; }
 
-button.btn, a.btn { display: inline-block; background: var(--accent); color: #08243f; border: none; border-radius: 5px; padding: .45rem .9rem; font-size: .85rem; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+button.btn, a.btn, label.btn { display: inline-block; background: var(--accent); color: #08243f; border: none; border-radius: 5px; padding: .45rem .9rem; font-size: .85rem; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
 .btn.secondary { background: var(--chip); color: var(--text); }
 .btn.danger { background: var(--bad); color: #fff; }
 .btn.small { padding: .2rem .5rem; font-size: .72rem; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+/* A <label class="btn"> wraps a hidden file input (Upload ZIP); undo the form-label look. */
+label.btn { margin: 0; line-height: normal; }
+label.btn.disabled { opacity: .5; cursor: not-allowed; }
+label.btn:focus-within { outline: 2px solid var(--text); outline-offset: 2px; }
 td .btn + .btn { margin-left: .3rem; }
 .right-btn { float: right; }
 .linkbtn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-align: left; }
@@ -173,3 +178,12 @@ table.settings .valuecell { min-width: 12rem; }
   header, nav { padding-left: 1rem; padding-right: 1rem; }
   main { padding: 1rem; }
 }
+
+/* OGraf schema form (SchemaForm.vue) */
+.req { color: var(--bad); margin-left: .15rem; }
+.schema-object.nested { border-left: 2px solid var(--border); padding-left: .6rem; margin-top: .5rem; }
+.schema-item { border-left: 2px solid var(--border); padding-left: .6rem; margin: .3rem 0; }
+.schema-field.missing input, .schema-field.missing select, .schema-field.missing textarea { border-color: var(--bad); }
+.schema-field input.colortext { width: 8rem; font-family: ui-monospace, monospace; }
+.schema-field input.pct { width: 8rem; }
+.schema-field input[type="color"] { width: 2.6rem; height: 2rem; padding: 0 .15rem; }

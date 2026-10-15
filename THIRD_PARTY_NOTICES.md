@@ -15,5 +15,8 @@ copyright files of every Ubuntu package in `/usr/share/doc/<package>/copyright`.
 | libsamplerate (Ubuntu `libsamplerate0`) | audio resampling | BSD-2-Clause |
 | picojson (`third_party/picojson`) | JSON | BSD-2-Clause |
 | stb_image_write (`third_party/stb`) | preview JPEGs | public domain or MIT |
+| jsoncons 1.9.0 (`third_party/jsoncons`, headers) | OGraf manifest check (JSON Schema draft 2020-12) | BSL-1.0 (`jsoncons/LICENSE`) |
+| miniz 3.1.2 (`third_party/miniz`) | unpacking OGraf ZIP uploads | MIT (`miniz/LICENSE`) |
+| EBU OGraf v1 JSON schemas (`third_party/ograf`, embedded in the binary) | OGraf manifest check | MIT (`ograf-schemas/LICENSE`) |
 | doctest (`third_party/doctest`, tests only, not in the image) | unit tests | MIT |
 | Fonts: DejaVu, Liberation 2, Noto, Noto CJK, Noto Color Emoji (Ubuntu packages) | page text | Bitstream Vera / DejaVu licence (DejaVu), SIL OFL 1.1 (the others) |

@@ -80,6 +80,11 @@ namespace mbs::config
                 {"BROWSER_PROFILE", "ephemeral", true, false, "ephemeral or persistent"},
                 {"BROWSER_WEBAUTHN", "false", true, false, "Offer WebAuthn (passkeys) to pages; off: sign-in pages fall back to other methods"},
                 {"BROWSER_TEMPLATES_DIR", "", true, false, "Local templates (default: <state>/templates)"},
+                {"BROWSER_OGRAF_DIR", "", true, false, "OGraf graphics library (default: <state>/ograf)"},
+                {"BROWSER_OGRAF_UPLOAD_MAX_MB", "256", true, false, "Largest OGraf ZIP upload in MiB (unpacked: 4x)"},
+                {"BROWSER_OGRAF_ACTION_TIMEOUT_MS", "10000", true, false, "How long the OGraf API waits for a graphic's action"},
+                {"BROWSER_OGRAF_NETWORK", "local", true, false, "OGraf mode: local (library only), any (the URL policy), or a comma list of extra hosts"},
+                {"BROWSER_OGRAF_CORS_ORIGINS", "", true, false, "Origins (space or comma list) allowed to call /ograf/v1 from a browser; never *"},
                 {"BROWSER_FONTS_DIR", "", true, false, "Extra fonts (default: <state>/fonts)"},
                 {"BROWSER_CA_DIR", "/etc/mxl-browser-source/ca", true, false, "PEM files imported into the NSS database"},
                 {"HTTPS_PROXY", "", true, false, "Proxy for page requests"},
@@ -445,6 +450,33 @@ namespace mbs::config
         c.persistentProfile = parseEnum<bool>("BROWSER_PROFILE", get("BROWSER_PROFILE"), {{"ephemeral", false}, {"persistent", true}});
         c.webauthn = parseBool("BROWSER_WEBAUTHN", get("BROWSER_WEBAUTHN"));
         c.templatesDir = get("BROWSER_TEMPLATES_DIR").empty() ? c.stateDir + "/templates" : get("BROWSER_TEMPLATES_DIR");
+        c.ografDir = get("BROWSER_OGRAF_DIR").empty() ? c.stateDir + "/ograf" : get("BROWSER_OGRAF_DIR");
+        c.ografUploadMaxMb = parseInt("BROWSER_OGRAF_UPLOAD_MAX_MB", get("BROWSER_OGRAF_UPLOAD_MAX_MB"), 1, 4096);
+        c.ografActionTimeoutMs = parseInt("BROWSER_OGRAF_ACTION_TIMEOUT_MS", get("BROWSER_OGRAF_ACTION_TIMEOUT_MS"), 100, 600000);
+        if (auto const net = lower(get("BROWSER_OGRAF_NETWORK")); net == "any")
+        {
+            c.ografNetworkAny = true;
+        }
+        else if (net != "local")
+        {
+            c.ografNetworkHosts = parseList(net);
+            if (c.ografNetworkHosts.empty())
+            {
+                throw ConfigError("BROWSER_OGRAF_NETWORK", "must be local, any or a comma list of hosts");
+            }
+        }
+        for (auto origin : parseList(get("BROWSER_OGRAF_CORS_ORIGINS")))
+        {
+            std::istringstream words(origin);
+            for (std::string word; words >> word;)
+            {
+                if (word == "*" || word.find_first_of(";\"") != std::string::npos || !(word.starts_with("http://") || word.starts_with("https://")))
+                {
+                    throw ConfigError("BROWSER_OGRAF_CORS_ORIGINS", "must list origins like https://controller.example (never *)");
+                }
+                c.ografCorsOrigins.push_back(word);
+            }
+        }
         c.fontsDir = get("BROWSER_FONTS_DIR").empty() ? c.stateDir + "/fonts" : get("BROWSER_FONTS_DIR");
         c.caDir = get("BROWSER_CA_DIR");
         c.httpsProxy = get("HTTPS_PROXY");

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "mbs-form",
+  "name": "Form (UI test)",
+  "description": "Every GDD type, required fields, a nested object and a list; shows its data as text.",
+  "main": "graphic.mjs",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 3,
+  "schema": {
+    "type": "object",
+    "required": ["headline", "kind"],
+    "properties": {
+      "headline": { "type": "string", "label": "Headline", "gddType": "single-line", "order": 1, "maxLength": 60 },
+      "body": { "type": "string", "label": "Body", "gddType": "multi-line", "order": 2, "default": "line one\nline two" },
+      "kind": { "type": "string", "label": "Kind", "gddType": "select", "enum": ["news", "sport"], "gddOptions": { "labels": { "news": "News", "sport": "Sport" } }, "order": 3 },
+      "level": { "type": "integer", "label": "Level", "gddType": "select", "enum": [1, 2, 3], "gddOptions": { "labels": { "1": "Low", "2": "Mid", "3": "High" } }, "default": 2, "order": 4 },
+      "tags": { "type": "array", "label": "Tags", "gddType": "select-multiple", "items": { "type": "string", "enum": ["a", "b", "c"] }, "gddOptions": { "labels": { "a": "Alpha", "b": "Beta", "c": "Gamma" } }, "default": ["b"], "order": 5 },
+      "color": { "type": "string", "label": "Colour", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$", "default": "#1e64c8", "order": 6 },
+      "shade": { "type": "string", "label": "Shade", "gddType": "color-rrggbbaa", "pattern": "^#[0-9a-f]{8}$", "default": "#000000cc", "order": 7 },
+      "opacity": { "type": "number", "label": "Opacity", "gddType": "percentage", "default": 0.9, "order": 8 },
+      "hold": { "type": "integer", "label": "Hold", "gddType": "duration-ms", "default": 5000, "order": 9 },
+      "logo": { "type": "string", "label": "Logo", "gddType": "file-path/image-path", "gddOptions": { "extensions": ["png"] }, "default": "logo.png", "order": 10 },
+      "live": { "type": "boolean", "label": "Live", "default": true, "order": 11 },
+      "secret": { "type": "string", "hidden": true, "default": "kept" },
+      "person": {
+        "type": "object", "label": "Person", "order": 12, "required": ["name"],
+        "properties": { "name": { "type": "string", "label": "Name", "default": "Anna" }, "role": { "type": "string", "label": "Role" } }
+      },
+      "rows": {
+        "type": "array", "label": "Rows", "order": 13,
+        "items": { "type": "object", "required": ["label"], "properties": { "label": { "type": "string", "label": "Label" }, "value": { "type": "number", "label": "Value" } } },
+        "default": [{ "label": "one", "value": 1 }]
+      }
+    }
+  },
+  "customActions": [
+    { "id": "flash", "name": "Flash", "description": "Flash the box once." },
+    { "id": "ticker", "name": "Set ticker", "description": "Show a ticker line.", "schema": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "label": "Ticker text" }, "speed": { "type": "integer", "label": "Speed", "default": 3 } } } }
+  ]
+}

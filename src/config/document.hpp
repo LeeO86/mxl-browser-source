@@ -24,6 +24,7 @@ namespace mbs::config
         std::string userAgentSuffix;
         int reloadIntervalS = 0;
         bool audio = true;
+        std::string mode = "page"; // page: show url; ograf: the built-in OGraf renderer (docs/ograf.md)
 
         bool operator==(Source const&) const = default;
     };

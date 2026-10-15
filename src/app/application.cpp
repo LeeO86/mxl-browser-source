@@ -15,6 +15,7 @@
 #include <iterator>
 
 #include "app/mxladapters.hpp"
+#include "app/ografbridge.hpp"
 #include "mxlio/domain.hpp"
 #include "mxlio/flowdef.hpp"
 #include "mxlio/setup.hpp"
@@ -23,6 +24,8 @@
 #include "util/logging.hpp"
 #include "util/net.hpp"
 #include "util/uuid.hpp"
+#include "webui_ograf_layer.hpp"
+#include "webui_ograf_renderer.hpp"
 
 namespace mbs::app
 {
@@ -126,6 +129,7 @@ namespace mbs::app
         constexpr std::size_t kMaxCrashes = 5;
         constexpr auto kCrashWindow = std::chrono::minutes(10);
         constexpr char const* kSlate = "https://templates.local/error.html";
+        constexpr std::string_view kOgrafUrl = "https://ograf.local/renderer/";
     }
 
     Application::Application(config::Loaded loaded, std::unique_ptr<config::Document> document, int argc, char** argv)
@@ -229,6 +233,24 @@ namespace mbs::app
             if (ec || !fs::is_directory(dir))
             {
                 throw StartupError(75, "state directory " + dir + " cannot be created: " + ec.message());
+            }
+        }
+        {
+            ograf::RenderInfo render;
+            render.width = static_cast<int>(_cfg.format.width);
+            render.height = static_cast<int>(_cfg.format.height);
+            render.frameRate = static_cast<double>(_cfg.format.rateNum) / static_cast<double>(_cfg.format.rateDen);
+            render.internet = _cfg.ografNetworkAny;
+            ograf::ZipLimits limits;
+            limits.maxUnpackedBytes = static_cast<std::uint64_t>(_cfg.ografUploadMaxMb) * 4 << 20;
+            _ografLibrary = std::make_unique<ograf::Library>(_cfg.ografDir, render, limits);
+            try
+            {
+                _ografLibrary->load();
+            }
+            catch (std::exception const& e)
+            {
+                throw StartupError(75, e.what());
             }
         }
         _ids = nmos::makeIds(_cfg.nmosSeed, _cfg.format.name, config::toString(_cfg.keyMode), _cfg.audioChannels);
@@ -450,6 +472,8 @@ namespace mbs::app
         rs.webauthn = _cfg.webauthn;
         rs.extraFlags = _cfg.chromiumFlagsAppend;
         rs.templatesDir = _cfg.templatesDir;
+        rs.ografPackagesDir = _ografLibrary->packagesDir();
+        rs.ografPages = {{"/renderer/index.html", std::string(webui::OgrafRendererHtml())}, {"/renderer/layer.html", std::string(webui::OgrafLayerHtml())}};
         std::string switches;
         for (auto const& s : cef::switchesFor(rs))
         {
@@ -461,14 +485,8 @@ namespace mbs::app
             throw StartupError(75, "CefInitialize failed");
         }
 
-        ops::UrlPolicySettings policy;
-        policy.allow = _cfg.urlAllow;
-        policy.deny = _cfg.urlDeny;
-        policy.registryHost = _cfg.nmosRegistryAddress;
-        policy.ownHost = _hostAddress;
-        policy.ownPorts = {_cfg.webPort, _cfg.nmosPort, _cfg.nmosPort + 1, _cfg.devtoolsPort};
         cef::BrowserSettings bs;
-        bs.url = source.url;
+        bs.url = shownUrl(source);
         bs.width = static_cast<int>(_cfg.format.width);
         bs.height = static_cast<int>(_cfg.format.height);
         bs.deviceScaleFactor = source.deviceScaleFactor;
@@ -476,11 +494,22 @@ namespace mbs::app
         bs.background = config::parseBackground(source.background).value_or(0);
         bs.popupsSameWindow = _cfg.popupsSameWindow;
         bs.confirmAccept = _cfg.confirmAccept;
-        _browser = std::make_unique<cef::Browser>(bs, *this, ops::UrlPolicy(policy));
+        _browser = std::make_unique<cef::Browser>(bs, *this, urlPolicy(source.mode));
         {
             std::lock_guard lock{_pageMutex};
-            _url = source.url;
+            _url = bs.url;
         }
+        _ografBridge = std::make_unique<OgrafBridge>(*_browser, std::chrono::milliseconds(_cfg.ografActionTimeoutMs), _metrics);
+        _ografLayers = std::make_unique<ograf::LayerSet>(*_ografBridge, *_ografLibrary, _cfg.stateDir + "/ograf-layers.json", _ografLibrary->render());
+        _ografLayers->onChange([this] { ografChanged(); });
+        _ografLayers->onRestore([this](bool ok) { _metrics.inc("ograf_restores_total", {{"result", ok ? "ok" : "error"}}); });
+        if (source.mode == "ograf")
+        {
+            _ografLayers->loadSaved(); // back loaded, not played (docs/ograf.md §3)
+        }
+        _ografApi = std::make_unique<ograf::ApiContext>(ograf::ApiContext{*_ografLibrary, *_ografLayers, _cfg.label, MBS_VERSION, _cfg.ografCorsOrigins,
+            [this] { return ografProblem(); }, &_metrics});
+        ografChanged();
         _engine->setRequestFrame([this] {
             if (_browserReady.load())
             {
@@ -506,6 +535,7 @@ namespace mbs::app
         _http = std::make_unique<ops::HttpServer>([this](ops::HttpRequest const& req, ops::HttpResponse& res) { handle(req, res); },
             [this](ops::HttpRequest const& req, ops::HttpResponse& reject) { return upgrade(req, reject); },
             [this](int fd, ops::HttpRequest const& req) { return devtoolsTunnel(fd, req); });
+        _http->streamLargeBodies({ograf::isUploadRequest, static_cast<std::size_t>(_cfg.ografUploadMaxMb) << 20, _cfg.ografDir + "/tmp"});
         std::string error;
         if (!_http->start(_cfg.webPort, error))
         {
@@ -574,9 +604,20 @@ namespace mbs::app
             log::error("shutdown_timeout", {{"seconds", seconds}});
             ::_exit(143);
         }).detach();
+        if (_ografBridge)
+        {
+            _ografBridge->setAvailable(false); // waiting calls answer at once
+        }
         if (_http)
         {
             _http->stop();
+        }
+        {
+            std::lock_guard lock{_ografRestoreMutex};
+            if (_ografRestore.joinable())
+            {
+                _ografRestore.join();
+            }
         }
         if (_engine)
         {
@@ -677,6 +718,7 @@ namespace mbs::app
             _loadStarted = Clock::now();
             _reloadAt.reset(); // a load started anyway (a pending crash reload would reload a newer page)
         }
+        ografPageGone();
         setPage(PageStatus::Loading, "");
     }
 
@@ -708,6 +750,10 @@ namespace mbs::app
         _metrics.observe("page_load_seconds", {}, seconds);
         setPage(PageStatus::Loaded, "");
         injectAfterLoad();
+        if (url.starts_with(kOgrafUrl))
+        {
+            ografPageLoaded();
+        }
         _browser->invalidate(); // spike S2: one paint of the loaded page even if it is static
         if (probeRenderer)
         {
@@ -852,6 +898,7 @@ namespace mbs::app
             _probeId = 0;
         }
         log::error("renderer_terminated", {{"reason", reason}, {"crashes_in_10_min", static_cast<int>(crashes)}});
+        ografPageGone();
         if (crashes >= kMaxCrashes)
         {
             {
@@ -869,6 +916,7 @@ namespace mbs::app
     {
         _metrics.inc("page_hangs_total");
         setPage(PageStatus::Hung, "renderer unresponsive");
+        ografPageGone();
         _hangTerminating.store(true);
         _browser->terminateRenderer();
     }
@@ -893,6 +941,10 @@ namespace mbs::app
 
     void Application::onDevToolsResult(int id, bool success, std::string const& text)
     {
+        if (_ografBridge && _ografBridge->deliver(id, success, text))
+        {
+            return;
+        }
         {
             std::lock_guard lock{_probeMutex};
             if (id == _probeId)
@@ -1046,13 +1098,22 @@ namespace mbs::app
 
     void Application::applySource(config::Source const& previous, config::Source const& next, bool navigate)
     {
-        if (navigate || next.url != previous.url)
+        if (next.mode != previous.mode)
+        {
+            log::info("source_mode", {{"from", previous.mode}, {"to", next.mode}});
+            if (previous.mode == "ograf")
+            {
+                _ografLayers->clearWhere(std::nullopt, "", ""); // dispose() each graphic before the page goes
+            }
+            _browser->setUrlPolicy(urlPolicy(next.mode));
+        }
+        if (navigate || shownUrl(next) != shownUrl(previous))
         {
             {
                 std::lock_guard lock{_pageMutex};
                 _autoReloadBlocked = false;
             }
-            _browser->navigate(next.url);
+            _browser->navigate(shownUrl(next));
         }
         if (next.zoom != previous.zoom)
         {
@@ -1089,6 +1150,89 @@ namespace mbs::app
         {
             log::info("restart_required", {{"field", "user_agent_suffix"}});
         }
+    }
+
+    std::string Application::shownUrl(config::Source const& source)
+    {
+        return source.mode == "ograf" ? std::string(kOgrafUrl) : source.url;
+    }
+
+    ops::UrlPolicy Application::urlPolicy(std::string const& mode) const
+    {
+        ops::UrlPolicySettings policy;
+        policy.allow = _cfg.urlAllow;
+        policy.deny = _cfg.urlDeny;
+        policy.registryHost = _cfg.nmosRegistryAddress;
+        policy.ownHost = _hostAddress;
+        policy.ownPorts = {_cfg.webPort, _cfg.nmosPort, _cfg.nmosPort + 1, _cfg.devtoolsPort};
+        // OGraf mode: the library only, unless BROWSER_OGRAF_NETWORK says any or names hosts (docs/ograf.md §5).
+        policy.localOnly = mode == "ograf" && !_cfg.ografNetworkAny;
+        policy.localExtra = _cfg.ografNetworkHosts;
+        return ops::UrlPolicy(policy);
+    }
+
+    std::optional<std::string> Application::modeChangeRefused(config::Source const& previous, config::Source const& next, ops::HttpRequest const& req) const
+    {
+        if (previous.mode == "ograf" && next.mode != "ograf" && _ografLayers->anyLoaded() && ops::queryValue(req.query, "force") != "true")
+        {
+            return std::string("layers hold graphics: leaving mode ograf would clear them (add ?force=true)");
+        }
+        return std::nullopt;
+    }
+
+    void Application::ografPageLoaded()
+    {
+        _ografBridge->setAvailable(true);
+        std::lock_guard lock{_ografRestoreMutex};
+        if (_ografRestore.joinable())
+        {
+            _ografRestore.join();
+        }
+        // After the start (or a switch into mode ograf) the layers come back loaded, not played;
+        // after a crash or reload each goes back to its step without animation (docs/ograf.md §3).
+        bool const withSteps = _ografRestoredOnce;
+        _ografRestoredOnce = true;
+        _ografRestore = std::thread([this, withSteps] { _ografLayers->restore(withSteps); });
+    }
+
+    void Application::ografPageGone()
+    {
+        if (_ografBridge && _ografBridge->available())
+        {
+            _ografBridge->setAvailable(false);
+            _ografLayers->pageLost();
+        }
+    }
+
+    void Application::ografChanged()
+    {
+        std::map<std::string, int> states;
+        picojson::array layers;
+        for (auto const& l : _ografLayers->snapshot())
+        {
+            ++states[l.state];
+            layers.push_back(ograf::layerJson(l));
+        }
+        _metrics.clear("ograf_layers");
+        for (auto const* state : {"empty", "loading", "ready", "on", "stopped", "error"})
+        {
+            _metrics.set("ograf_layers", {{"state", state}}, states[state]);
+        }
+        _metrics.set("ograf_graphics", {}, static_cast<double>(_ografLibrary->list().size()));
+        broadcastEvent(R"({"type":"ograf","layers":)" + picojson::value(layers).serialize() + "}");
+    }
+
+    std::string Application::ografProblem() const
+    {
+        if (_doc->source().mode != "ograf")
+        {
+            return "the source is in mode page (set mode ograf)";
+        }
+        if (!_ografBridge->available())
+        {
+            return "the renderer page is loading or recovering";
+        }
+        return {};
     }
 
     // Once a second: reload timers (crash backoff, reload_interval_s), the renderer liveness
