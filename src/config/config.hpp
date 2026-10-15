@@ -114,7 +114,7 @@ namespace mbs::config
         int frameLead = 1;
         bool realtime = true;
         int framePipeline = 1;
-        FrameClockMode frameClock = FrameClockMode::External;
+        FrameClockMode frameClock = FrameClockMode::Internal;
         int frameClockPhaseMs = 0; // φ: Chromium's BeginFrames at T(k) + φ (internal clock)
         int convertThreads = 4;
         Render render = Render::Auto;

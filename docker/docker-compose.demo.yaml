@@ -43,6 +43,7 @@ services:
       MXL_OUTPUT_DOMAIN_DIR: /Volumes/mxl/browser-source
       MXL_CLEANUP_ON_EXIT: "true"
       BROWSER_RENDER: software
+      BROWSER_FRAME_CLOCK: internal # the default; external: one BeginFrame per grain (1.2.0)
       BROWSER_LABEL: Demo
       SHUTDOWN_TIMEOUT_S: "10"
 

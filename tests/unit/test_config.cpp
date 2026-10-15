@@ -101,11 +101,12 @@ TEST_CASE("frame-loop settings: pipeline, real-time threads, conversion threads,
     CHECK(errorKey({{"BROWSER_REALTIME", "maybe"}}) == "BROWSER_REALTIME");
 }
 
-TEST_CASE("frame clock: external by default, internal with a phase shorter than the period")
+TEST_CASE("frame clock: internal by default, external on request, a phase shorter than the period")
 {
     auto const d = load({}, {}, "host").config;
-    CHECK((d.frameClock == FrameClockMode::External));
+    CHECK((d.frameClock == FrameClockMode::Internal));
     CHECK(d.frameClockPhaseMs == 0);
+    CHECK((load({{"BROWSER_FRAME_CLOCK", "external"}}, {}, "host").config.frameClock == FrameClockMode::External));
     auto const c = load({{"BROWSER_FRAME_CLOCK", "internal"}, {"BROWSER_FRAME_CLOCK_PHASE_MS", "5"}}, {}, "host").config;
     CHECK((c.frameClock == FrameClockMode::Internal));
     CHECK(c.frameClockPhaseMs == 5);

@@ -65,7 +65,7 @@ namespace mbs::config
                 {"BROWSER_FRAME_LEAD", "1", true, false, "Video latency in periods assumed by BROWSER_VIDEO_DELAY_GRAINS=auto (1-2)"},
                 {"BROWSER_RENDER", "auto", true, false, "auto, gpu, software"},
                 {"BROWSER_FRAME_PIPELINE", "1", true, false, "1: each paint has two periods instead of one to reach its grain (one period more latency)"},
-                {"BROWSER_FRAME_CLOCK", "external", true, false, "external: one BeginFrame per grain; internal: Chromium's own frame clock at the house rate, phase-locked to TAI (25 and 50 Hz formats)"},
+                {"BROWSER_FRAME_CLOCK", "internal", true, false, "internal: Chromium's own frame clock at the house rate, phase-locked to TAI (25 and 50 Hz formats; 59.94 and 29.97 fall back to external); external: one BeginFrame per grain"},
                 {"BROWSER_FRAME_CLOCK_PHASE_MS", "0", true, false, "Internal frame clock: Chromium's BeginFrames this long after each grain start (0 to the period)"},
                 {"BROWSER_REALTIME", "true", true, false, "Tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO >= 10 (or CAP_SYS_NICE) allows it"},
                 {"BROWSER_CONVERT_THREADS", "4", true, false, "Threads converting one frame in bands of rows (1-16)"},
