@@ -620,6 +620,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_API_TOKEN` | empty | yes | optional bearer token (secret) |
 | `BROWSER_PROFILE` | `ephemeral` | yes | `ephemeral` (cache in `/tmp`, cleared at start) or `persistent` (`<state>/profile`, cookies and logins survive); in both, Chromium's histogram file lives in `/dev/shm` (§6) |
 | `BROWSER_WEBGPU` | `false` | yes | `true` offers WebGPU (Dawn on Vulkan) to pages; `false` adds `disable-features=WebGPUService,WebGPUBlobCache`, so `navigator.gpu.requestAdapter()` answers null without starting Dawn (the image has no Vulkan driver; a Dawn probe crashed a helper in the M4 soak). It does not stop every probe: the 8 h soak had one "stack smashing detected" in a short-lived helper at the first load of a WebGPU-probing graphic (harmless there, not fixed) |
+| `BROWSER_SERVICE_WORKERS` | `false` | yes | `true` lets pages register service workers, whose requests follow the URL policy; `false` hides `navigator.serviceWorker` and refuses any worker request (§14.3) |
 | `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5) |
 | `BROWSER_TEMPLATES_DIR` | `<state>/templates` | yes | §4.2 |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | yes | OGraf library (§4.6) |
@@ -680,7 +681,7 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `js_dialogs_total` | counter | `type` |
 | `popups_blocked_total`, `downloads_blocked_total` | counter | – |
 | `permission_denied_total` | counter | `type` |
-| `navigation_blocked_total` | counter | `reason` |
+| `navigation_blocked_total` | counter | `reason` (`scheme`, `link_local`, `loopback`, `kubernetes`, `registry`, `own_port`, `denied`, `not_allowed`, `ograf_local`, `service_worker`) |
 | `console_messages_total` | counter | `level` |
 | `interact_sessions` | gauge | – (controlling sessions, 0 or 1) |
 | `interaction_events_total` | counter | `type`, `result` (`ok`, `rejected`, `dropped`) |
@@ -741,6 +742,10 @@ The browser runs web content that the function does not control: a template from
 - Denied by default (`BROWSER_URL_DENY`): link-local `169.254.0.0/16` and `fe80::/10` (cloud metadata), loopback except the function's own template scheme, the Kubernetes API (`kubernetes.default.svc`, the service CIDR's first address), the NMOS registry address and the function's own ports. The platform adds its cluster CIDRs.
 - `BROWSER_URL_ALLOW` (host globs and CIDRs) MAY restrict navigation to known graphics servers; when set, everything else is refused.
 - Checked on navigation (`OnBeforeBrowse`), on redirects, and on sub-resource requests by host (`OnBeforeResourceLoad`). DNS-based bypasses are possible; the NetworkPolicy is the real fence.
+- **Service workers** (1.3.1). CEF gives the requests of a page's service worker no browser, so they reach no `CefRequestHandler`; in 1.3.0 a worker could fetch loopback, the function's own ports or hosts outside `BROWSER_URL_ALLOW` (lab: all three went through, `navigation_blocked_total` counted only the page's own attempts). Now:
+  - `BROWSER_SERVICE_WORKERS=false` (default): renderers remove `navigator.serviceWorker` before the page's scripts run (pages and iframes see a browser without service workers; dedicated workers never had it), every request of a worker is refused (`reason="service_worker"`), and with `BROWSER_PROFILE=persistent` the workers registered while they were on (`<profile>/Default/Service Worker`) are removed at start. Graphics and broadcast pages rarely need them; YouTube and the OGraf renderer work without (lab).
+  - `true`: the browser's request context has a `CefRequestContextHandler` that applies the same policy to every request without a browser (`fetch()`, `importScripts()` and the fetches of a fetch event, also when the worker starts for a navigation; lab, CEF 144), counted with the usual reasons. Only the worker's own script (same origin as the page that registered it, so allowed when the page was) and its update checks reach no handler.
+  - The NetworkPolicy (§14.4) stays the real fence for both.
 
 ### 14.4 Network
 
@@ -836,6 +841,7 @@ Measured on the target GPUs (A4000, L4) and the lab A16, recorded in `docs/perfo
   - `tone.html`: a 1 kHz tone at −20 dBFS arrives on the configured channels; a silent page gives zeros at the same cadence.
   - `interact.html`: a WebSocket client clicks a button, types text (incl. non-ASCII and an IME commit) and scrolls; the page's reaction appears in a grain within 150 ms (lab) and the `ack` grain index is not later than the first grain showing it. It drags across a line of text, copies it with Ctrl+C, then double- and triple-clicks: the page reports each selection, and the highlight appears in a grain.
   - `dialogs.html`, `popup.html`, `download.html`, `permissions.html`: nothing blocks; events and counters as in §4.5.
+  - `service-worker.html` and `tests/integration/sw_test.py`: no `navigator.serviceWorker` by default; with `BROWSER_SERVICE_WORKERS=true` (a second container) a worker's allowed fetch arrives, its fetch, import and fetch-event fetch to loopback and the own port are refused and counted (§14.3).
   - `hang.html` and `kill -9` of the renderer process (`docker exec`): output holds, recovery within `BROWSER_HANG_TIMEOUT_MS` + 5 s and within 5 s after a crash, the process stays up.
   - Template API with a CasparCG-style template (`play`, `update`, `next`, `stop`).
   - IS-05 enable/disable of each sender; restart restores the enable states.

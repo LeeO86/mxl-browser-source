@@ -86,6 +86,7 @@ namespace mbs::config
                 {"BROWSER_PROFILE", "ephemeral", true, false, "ephemeral or persistent"},
                 {"BROWSER_WEBAUTHN", "false", true, false, "Offer WebAuthn (passkeys) to pages; off: sign-in pages fall back to other methods"},
                 {"BROWSER_WEBGPU", "false", true, false, "Offer WebGPU to pages; off: no navigator.gpu and no Vulkan/Dawn probe in the GPU process"},
+                {"BROWSER_SERVICE_WORKERS", "false", true, false, "Let pages register service workers (their requests follow the URL policy); off: no navigator.serviceWorker"},
                 {"BROWSER_TEMPLATES_DIR", "", true, false, "Local templates (default: <state>/templates)"},
                 {"BROWSER_OGRAF_DIR", "", true, false, "OGraf graphics library (default: <state>/ograf)"},
                 {"BROWSER_OGRAF_UPLOAD_MAX_MB", "256", true, false, "Largest OGraf ZIP upload in MiB (unpacked: 4x)"},
@@ -468,6 +469,7 @@ namespace mbs::config
         c.persistentProfile = parseEnum<bool>("BROWSER_PROFILE", get("BROWSER_PROFILE"), {{"ephemeral", false}, {"persistent", true}});
         c.webauthn = parseBool("BROWSER_WEBAUTHN", get("BROWSER_WEBAUTHN"));
         c.webgpu = parseBool("BROWSER_WEBGPU", get("BROWSER_WEBGPU"));
+        c.serviceWorkers = parseBool("BROWSER_SERVICE_WORKERS", get("BROWSER_SERVICE_WORKERS"));
         c.templatesDir = get("BROWSER_TEMPLATES_DIR").empty() ? c.stateDir + "/templates" : get("BROWSER_TEMPLATES_DIR");
         c.ografDir = get("BROWSER_OGRAF_DIR").empty() ? c.stateDir + "/ograf" : get("BROWSER_OGRAF_DIR");
         c.ografUploadMaxMb = parseInt("BROWSER_OGRAF_UPLOAD_MAX_MB", get("BROWSER_OGRAF_UPLOAD_MAX_MB"), 1, 4096);

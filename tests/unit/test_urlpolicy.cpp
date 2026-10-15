@@ -114,3 +114,26 @@ TEST_CASE("OGraf mode with BROWSER_OGRAF_NETWORK=local: the library only, plus l
     UrlPolicy const page(UrlPolicySettings{});
     CHECK(page.check("https://fonts.googleapis.com/css", false).allowed);
 }
+
+TEST_CASE("a service worker's requests: refused while service workers are off, else the same policy")
+{
+    UrlPolicySettings s;
+    s.allow = {"graphics.media.int"};
+    s.ownHost = "10.0.0.5";
+    s.ownPorts = {8160};
+    UrlPolicy const off(s);
+    CHECK(off.checkServiceWorker("https://graphics.media.int/data.json").reason == "service_worker");
+    CHECK(off.checkServiceWorker("http://127.0.0.1:8160/api/v1/info").reason == "service_worker");
+    s.serviceWorkers = true;
+    UrlPolicy const on(s);
+    CHECK(on.checkServiceWorker("https://graphics.media.int/data.json").allowed);
+    CHECK(on.checkServiceWorker("http://127.0.0.1:18471/probe").reason == "loopback");
+    CHECK(on.checkServiceWorker("http://169.254.169.254/latest/meta-data").reason == "link_local");
+    CHECK(on.checkServiceWorker("http://10.0.0.5:8160/api/v1/info").reason == "own_port");
+    CHECK(on.checkServiceWorker("http://172.17.0.1/").reason == "not_allowed");
+    CHECK(on.checkServiceWorker("data:text/plain,x").allowed); // a sub-resource, not a navigation
+    s.localOnly = true;
+    CHECK(UrlPolicy(s).checkServiceWorker("https://graphics.media.int/data.json").reason == "ograf_local");
+    // The page's own requests do not depend on the setting.
+    CHECK(off.check("https://graphics.media.int/data.json", false).allowed);
+}

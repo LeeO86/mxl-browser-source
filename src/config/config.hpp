@@ -135,6 +135,7 @@ namespace mbs::config
         bool persistentProfile = false;
         bool webauthn = false;
         bool webgpu = false;
+        bool serviceWorkers = false; // BROWSER_SERVICE_WORKERS
         std::string templatesDir;
         std::string ografDir;
         int ografUploadMaxMb = 256;

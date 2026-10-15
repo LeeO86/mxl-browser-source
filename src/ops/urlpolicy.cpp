@@ -210,6 +210,15 @@ namespace mbs::ops
         return false;
     }
 
+    UrlVerdict UrlPolicy::checkServiceWorker(std::string_view url) const
+    {
+        if (!_settings.serviceWorkers)
+        {
+            return {false, "service_worker"};
+        }
+        return check(url, false);
+    }
+
     UrlVerdict UrlPolicy::check(std::string_view url, bool topLevel) const
     {
         auto const colon = url.find(':');

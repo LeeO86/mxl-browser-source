@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (1.3.1)
+
+- **Service workers and the URL policy** (SPEC §14.3). CEF gives a page's service worker requests no browser, so they reached none of the URL policy's handlers: a page could register a worker that fetched loopback, the function's own ports, the registry or hosts outside `BROWSER_URL_ALLOW`, and in mode `ograf` anything despite `BROWSER_OGRAF_NETWORK=local` (lab, 1.3.0: all went through, `navigation_blocked_total` did not count them). This was the known limitation of the 1.3.0 release.
+  - New setting `BROWSER_SERVICE_WORKERS` (default `false`, restart). Off, renderers remove `navigator.serviceWorker` before the page runs (pages and iframes take their path without one), any request of a worker is refused and counted as `navigation_blocked_total{reason="service_worker"}`, and a persistent profile loses the workers registered while they were on. YouTube (`youtube.html`, picture and sound) and the OGraf examples work as before.
+  - On, the browser has its own request context (sharing the global context's storage) whose `CefRequestContextHandler` applies the same policy to every request without a browser: the worker's `fetch()`, `importScripts()` and the fetches of its fetch events, also when it starts for a navigation, counted with the usual reasons. Only the worker's own script, same origin as the page that registered it, reaches no handler.
+  - Tests: unit tests for the setting and `checkServiceWorker`; `templates/service-worker.html` and `tests/integration/sw_test.py` in CI (default container, and a second one with `BROWSER_SERVICE_WORKERS=true`).
+
 ## 1.3.0
 
 - EBU OGraf v1 (`docs/ograf.md`, SPEC §4.6):
