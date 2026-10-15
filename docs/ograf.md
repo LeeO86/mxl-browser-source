@@ -189,6 +189,10 @@ operator gets the setup back with one Play.
   - The ZIP is unpacked into `tmp/`, checked, then renamed into `packages/`.
 - **Size:** today the HTTP server refuses bodies over 4 MiB, and the EBU weather example alone is 9.7 MB. So
   this one route streams the body to `tmp/` with its own limit, instead of reading it into memory.
+  - The token is checked from the request head, before a byte of the body is stored: an unauthenticated
+    client gets 401 and cannot fill `/config`.
+  - At most 2 uploads are stored at once (a third gets 429 with `Retry-After: 5`), and each body must
+    arrive within 10 minutes (else 408, and its partial file is removed), besides 30 s without a byte.
 - **Libraries:**
   - **miniz** (MIT, one C file in `third_party/`, like stb) to unpack.
   - **jsoncons** (Boost licence, header-only, vcpkg) for JSON Schema **draft 2020-12**, which the OGraf

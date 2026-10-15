@@ -597,7 +597,26 @@ namespace mbs::app
         _http = std::make_unique<ops::HttpServer>([this](ops::HttpRequest const& req, ops::HttpResponse& res) { handle(req, res); },
             [this](ops::HttpRequest const& req, ops::HttpResponse& reject) { return upgrade(req, reject); },
             [this](int fd, ops::HttpRequest const& req) { return devtoolsTunnel(fd, req); });
-        _http->streamLargeBodies({ograf::isUploadRequest, static_cast<std::size_t>(_cfg.ografUploadMaxMb) << 20, _cfg.ografDir + "/tmp"});
+        // The token is checked from the head, before the body is stored (docs/ograf.md §6).
+        ops::LargeBodies uploads{ograf::isUploadRequest, static_cast<std::size_t>(_cfg.ografUploadMaxMb) << 20, _cfg.ografDir + "/tmp"};
+        uploads.admit = [this](ops::HttpRequest const& req, ops::HttpResponse& reject) {
+            if (authorized(req))
+            {
+                return true;
+            }
+            reject = {};
+            if (_ografApi)
+            {
+                ograf::unauthorized(*_ografApi, req, reject);
+            }
+            else
+            {
+                reject.status = 401;
+                reject.body = R"({"error":"token required"})";
+            }
+            return false;
+        };
+        _http->streamLargeBodies(std::move(uploads));
         std::string error;
         if (!_http->start(_cfg.webPort, error))
         {

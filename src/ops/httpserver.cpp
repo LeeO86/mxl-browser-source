@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -82,6 +83,7 @@ namespace mbs::ops
             case 403: return "Forbidden";
             case 404: return "Not Found";
             case 405: return "Method Not Allowed";
+            case 408: return "Request Timeout";
             case 409: return "Conflict";
             case 413: return "Payload Too Large";
             case 422: return "Unprocessable Content";
@@ -266,6 +268,23 @@ namespace mbs::ops
         std::vector<Job> jobs;
         std::mutex socketsMutex;
         std::vector<std::weak_ptr<WebSocket>> sockets;
+        std::atomic<std::size_t> uploads{0}; // large bodies being streamed or answered
+
+        // One of large.maxConcurrent upload slots, held until the body file is removed.
+        class UploadSlot
+        {
+        public:
+            explicit UploadSlot(std::atomic<std::size_t>& count)
+                : _count(count)
+            {
+            }
+            ~UploadSlot() { _count.fetch_sub(1); }
+            UploadSlot(UploadSlot const&) = delete;
+            UploadSlot& operator=(UploadSlot const&) = delete;
+
+        private:
+            std::atomic<std::size_t>& _count;
+        };
 
         void reap()
         {
@@ -306,14 +325,35 @@ namespace mbs::ops
 
         // A large body (an upload) goes to a file in large.dir instead of memory; the file is
         // removed after the handler answered.
-        bool readBodyToFile(int fd, HttpRequest& req, std::string& rest, std::size_t length)
+        // The token is checked before the body is read, so an unauthenticated client cannot fill
+        // the disk; at most large.maxConcurrent bodies are stored at once, each within a deadline.
+        bool readBodyToFile(int fd, HttpRequest& req, std::string& rest, std::size_t length, std::unique_ptr<UploadSlot>& slot)
         {
+            if (large.admit)
+            {
+                HttpResponse reject;
+                reject.status = 401;
+                reject.body = R"({"error":"token required"})";
+                if (!large.admit(req, reject))
+                {
+                    writeAll(fd, responseText(reject));
+                    return false;
+                }
+            }
             if (length > large.maxBytes)
             {
                 std::string const body = "{\"error\":\"body too large (at most " + std::to_string(large.maxBytes >> 20) + " MiB)\"}";
                 writeAll(fd, responseText(HttpResponse{413, "application/json", body, {}}));
                 return false;
             }
+            if (uploads.fetch_add(1) >= std::max<std::size_t>(1, large.maxConcurrent))
+            {
+                uploads.fetch_sub(1);
+                writeAll(fd, responseText(HttpResponse{429, "application/json", R"({"error":"too many uploads at once, try again later"})", {{"Retry-After", "5"}}}));
+                return false;
+            }
+            slot = std::make_unique<UploadSlot>(uploads); // taken above, given back when the slot ends
+            auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(large.deadlineMs);
             std::string path = large.dir + "/upload-XXXXXX";
             int const out = ::mkstemp(path.data());
             if (out < 0)
@@ -336,12 +376,18 @@ namespace mbs::ops
             put(rest);
             rest.erase(0, std::min(rest.size(), length));
             int idle = 0;
+            bool late = false;
             while (ok && written < length && !stop.load())
             {
-                std::string chunk;
-                if (!readSome(fd, chunk, 500))
+                if (std::chrono::steady_clock::now() >= deadline)
                 {
-                    if (++idle > 60) // 30 s without a byte
+                    late = true;
+                    break;
+                }
+                std::string chunk;
+                if (!readSome(fd, chunk, 100))
+                {
+                    if (++idle > 300) // 30 s without a byte
                     {
                         ok = false;
                     }
@@ -354,6 +400,10 @@ namespace mbs::ops
             if (!ok || written < length)
             {
                 ::unlink(path.c_str());
+                if (late)
+                {
+                    writeAll(fd, responseText(HttpResponse{408, "application/json", R"({"error":"the upload took too long"})", {}}));
+                }
                 return false;
             }
             req.bodyFile = path;
@@ -362,7 +412,7 @@ namespace mbs::ops
 
         // Reads the request; `rest` keeps bytes after the body (a WebSocket client may send its
         // first frame right after the handshake).
-        bool readHttp(int fd, HttpRequest& req, std::string& rest)
+        bool readHttp(int fd, HttpRequest& req, std::string& rest, std::unique_ptr<UploadSlot>& slot)
         {
             std::string data;
             int idle = 0;
@@ -426,7 +476,7 @@ namespace mbs::ops
             }
             if (large.match && large.match(req))
             {
-                return readBodyToFile(fd, req, rest, length);
+                return readBodyToFile(fd, req, rest, length, slot);
             }
             if (length > 4 * 1024 * 1024)
             {
@@ -614,7 +664,8 @@ namespace mbs::ops
             HttpRequest req;
             req.peer = std::move(peer);
             std::string rest;
-            if (!readHttp(fd, req, rest))
+            std::unique_ptr<UploadSlot> slot; // released after the body file is removed
+            if (!readHttp(fd, req, rest, slot))
             {
                 ::close(fd);
                 return;

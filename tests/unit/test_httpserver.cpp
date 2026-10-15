@@ -7,8 +7,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <filesystem>
 #include <string>
+#include <thread>
 
 #include "ops/httpserver.hpp"
 #include "util/net.hpp"
@@ -177,6 +179,74 @@ TEST_CASE("a large-body route streams its body to a file; other bodies stay limi
     CHECK_FALSE(std::filesystem::exists(seenFile)); // removed after the answer
     CHECK(send("/upload", 9u << 20, false).find("HTTP/1.1 413") == 0);
     CHECK(send("/other", 6u << 20, false).find("HTTP/1.1 413") == 0);
+    server.stop();
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("an upload is admitted from its head, at most two at once, within a deadline")
+{
+    auto const dir = std::filesystem::temp_directory_path() / "mbs-upload-limits-test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    auto const files = [&] { return std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator{}); };
+    HttpServer server([&](HttpRequest const&, HttpResponse& res) { res.body = "ok"; });
+    LargeBodies large{[](HttpRequest const& req) { return req.path == "/upload"; }, 8u << 20, dir.string()};
+    large.admit = [](HttpRequest const& req, HttpResponse& reject) {
+        if (req.header("Authorization") == "Bearer s")
+        {
+            return true;
+        }
+        reject.status = 401;
+        reject.body = R"({"error":"token required"})";
+        return false;
+    };
+    large.deadlineMs = 1500;
+    server.streamLargeBodies(large);
+    std::string error;
+    REQUIRE(server.start(0, error));
+    auto const head = [&](bool token, std::size_t size) {
+        int const fd = connectTo(server.port());
+        writeAll(fd, "POST /upload HTTP/1.1\r\nHost: t\r\n" + std::string(token ? "Authorization: Bearer s\r\n" : "") +
+                         "Content-Length: " + std::to_string(size) + "\r\n\r\n");
+        return fd;
+    };
+    auto const answer = [](int fd) { return readUntil(fd, [](std::string const& d) { return d.find("\r\n\r\n") != std::string::npos; }); };
+
+    // Without the token: 401 from the head alone, nothing stored. (Only the head is sent: body
+    // bytes the server never reads would make its close a reset that can overtake the answer.)
+    int const anonymous = head(false, 6u << 20);
+    CHECK(answer(anonymous).find("HTTP/1.1 401") == 0);
+    ::close(anonymous);
+    CHECK(files() == 0);
+
+    // Two slow uploads hold both slots; a third is refused with 429 without being stored.
+    int const first = head(true, 1u << 20);
+    int const second = head(true, 1u << 20);
+    writeAll(first, std::string(1024, 'a'));
+    writeAll(second, std::string(1024, 'b'));
+    for (int i = 0; i < 100 && files() < 2; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(files() == 2);
+    int const third = head(true, 1024);
+    CHECK(answer(third).find("HTTP/1.1 429") == 0);
+    ::close(third);
+
+    // Trickled past the deadline: 408 and the partial files are removed; the slots are free again.
+    CHECK(answer(first).find("HTTP/1.1 408") == 0);
+    CHECK(answer(second).find("HTTP/1.1 408") == 0);
+    ::close(first);
+    ::close(second);
+    for (int i = 0; i < 100 && files() > 0; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(files() == 0);
+    int const again = head(true, 1024);
+    writeAll(again, std::string(1024, 'c'));
+    CHECK(answer(again).find("HTTP/1.1 200") == 0);
+    ::close(again);
     server.stop();
     std::filesystem::remove_all(dir);
 }
