@@ -656,15 +656,20 @@ namespace mbs::engine
                 _current = kBlack;
             }
             // Hold keeps the last frame; converted paints wait in _pending for the page to be ready.
-            // The delay moves one grain per tick towards the wanted one: one more is a repeat (the
-            // video holds while the audio played the silence that raised its target), one less a skip.
+            // The delay grows one grain per tick towards the wanted one (a repeat: the video holds
+            // while the audio played the silence that raised its target). It shrinks by at most one
+            // grain per kDelayDecreaseTicks (a skip): a target that falls in one step (no stream any
+            // more, or late audio that was lost) gives single skipped frames half a second apart,
+            // never a run of them.
+            _ticksSinceDecrease = std::min(_ticksSinceDecrease + 1, kDelayDecreaseTicks);
             if (_videoDelayWanted > _videoDelay)
             {
                 ++_videoDelay;
             }
-            else if (_videoDelayWanted < _videoDelay)
+            else if (_videoDelayWanted < _videoDelay && _ticksSinceDecrease >= kDelayDecreaseTicks)
             {
                 --_videoDelay;
+                _ticksSinceDecrease = 0;
             }
             _videoDelayNow.store(_videoDelay, std::memory_order_relaxed);
             auto const size = _ring.size();

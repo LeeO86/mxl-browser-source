@@ -920,12 +920,27 @@ TEST_CASE("when the stream stops, a raised audio target and the video delay go b
         clock.tick(k++);
     }
     CHECK(engine.stats().videoDelayGrains == raised);
-    for (int i = 0; i < 150; ++i) // past 10 s since the underrun, and a grain per tick back
+    // Past 10 s since the underrun the target goes back in one step; the video delay follows by
+    // at most one grain (one skipped frame) per 25 ticks, never two skips in a row.
+    std::vector<std::uint32_t> delays{raised};
+    for (int i = 0; i < 150 + 25 * static_cast<int>(raised); ++i)
     {
         clock.tick(k++);
+        delays.push_back(engine.stats().videoDelayGrains);
     }
     clock.release();
     engine.stop();
+    int lastSkip = -1000;
+    for (std::size_t i = 1; i < delays.size(); ++i)
+    {
+        CHECK(delays[i] <= delays[i - 1]);
+        CHECK(delays[i - 1] - delays[i] <= 1);
+        if (delays[i] < delays[i - 1])
+        {
+            CHECK(static_cast<int>(i) - lastSkip >= 25);
+            lastSkip = static_cast<int>(i);
+        }
+    }
     CHECK(engine.stats().videoDelayGrains == 1);
     CHECK(engine.stats().audio.targetSeconds == doctest::Approx(0.06));
     CHECK(engine.stats().audioFifoOverflows == 0);

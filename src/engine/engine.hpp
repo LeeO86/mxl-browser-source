@@ -344,6 +344,8 @@ namespace mbs::engine
         // wanted delay, commit moves towards it by one grain per tick (a repeat or a skip).
         std::uint32_t _videoDelayWanted = 0;
         std::uint32_t _videoDelay = 0;
+        static constexpr std::uint32_t kDelayDecreaseTicks = 25; // 0.5 s at 50p, 1 s at 25p
+        std::uint32_t _ticksSinceDecrease = kDelayDecreaseTicks;
         std::atomic<std::uint32_t> _videoDelayNow{0};
 
         // Preview.
