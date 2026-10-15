@@ -86,7 +86,9 @@ namespace mbs::engine
         bool straightFill = true;         // un-premultiply the fill (only with a key)
         std::uint32_t audioChannels = 2;  // 0: no audio flow
         std::uint32_t audioTargetFrames = 2880; // FIFO target (60 ms)
+        std::uint32_t audioMaxTargetFrames = 0; // > audioTargetFrames: the target rises after underruns up to this (BROWSER_AUDIO_BUFFER_MAX_MS)
         std::uint32_t videoDelayGrains = 0;
+        std::uint32_t videoDelayMaxGrains = 0;  // the video delay follows the audio target up to this (ring and pool sized for it)
         std::uint32_t pipelineGrains = 0; // 1: up to two converted frames wait and the oldest is committed, so a late paint is shown one tick later instead of dropped (BROWSER_FRAME_PIPELINE)
         std::uint64_t marginNs = 1'000'000; // wake this long after the grain start (ε)
         Substitute onPageError = Substitute::Hold;
@@ -155,6 +157,7 @@ namespace mbs::engine
         std::vector<double> audioPeakDbfs; // per flow channel, last grain
         bool internalFrameClock = false;
         FrameClockStats frameClock;
+        std::uint32_t videoDelayGrains = 0; // now (the base plus what the adaptive audio target added)
     };
 
     class Engine final : TickActions
@@ -318,6 +321,11 @@ namespace mbs::engine
         std::function<void(std::uint64_t)> _anchorFrameClock;
         std::atomic<int> _avOffsetMs{0};
         int _appliedAvOffsetMs = 0;
+        // The video delay follows the adaptive audio target (tick thread): writeAudio sets the
+        // wanted delay, commit moves towards it by one grain per tick (a repeat or a skip).
+        std::uint32_t _videoDelayWanted = 0;
+        std::uint32_t _videoDelay = 0;
+        std::atomic<std::uint32_t> _videoDelayNow{0};
 
         // Preview.
         std::uint32_t _previewWidth = 0;

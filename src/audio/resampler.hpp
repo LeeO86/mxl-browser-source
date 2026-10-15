@@ -10,6 +10,14 @@
 // the FIFO holds one grain plus a packet, not the whole target; the silence played is a debt,
 // and audio that arrives late for it is dropped (only down to the target), so the hole is as
 // long as the lateness and the latency comes back to the target. The resampler's state is kept.
+//
+// Adaptive target (1.3.0, M7): Chromium sometimes delivers its audio late in bursts (a pause of
+// 80-350 ms, then the held packets at once with their original pts; docs/performance.md). With a
+// maximum above the base target, every frame of silence an underrun plays raises the target by
+// the same amount (up to the maximum), so the late audio is kept instead of dropped and the
+// next stall of that size is absorbed. After kHoldSeconds without an underrun the target falls
+// back towards the base at kDecayMsPerSecond, which the controller follows (1000 ppm). The
+// engine delays the video by the same amount, so lip sync holds.
 #pragma once
 
 #include <cstddef>
@@ -32,6 +40,8 @@ namespace mbs::audio
         std::uint64_t realigned = 0;      // frames dropped because they arrived after their silence was played
         double driftPpm = 0;              // the controller's correction
         double fillSeconds = 0;           // FIFO fill (plus the resampler's input), smoothed over about 1 s
+        double targetSeconds = 0;         // the fill target now (base plus what underruns added)
+        std::uint64_t targetRaises = 0;   // underrun ticks that raised the target
     };
 
     class Resampler
@@ -43,8 +53,11 @@ namespace mbs::audio
         static constexpr double kFarSeconds = 0.020;
         static constexpr std::uint64_t kDebtNs = 2'000'000'000; // late audio older than this is not dropped any more
         static constexpr std::size_t kPacketFrames = 480;       // CEF delivers 10 ms packets (SPEC §6)
+        static constexpr double kHoldSeconds = 10.0;            // adaptive target: no decay this long after an underrun
+        static constexpr double kDecayMsPerSecond = 1.0;        // then the target falls this fast (1000 ppm)
 
-        Resampler(std::size_t channels, std::size_t targetFrames);
+        /// `maxTargetFrames` > `targetFrames` makes the target adaptive (above); 0 or less keeps it fixed.
+        Resampler(std::size_t channels, std::size_t targetFrames, std::size_t maxTargetFrames = 0);
         ~Resampler();
         Resampler(Resampler const&) = delete;
         Resampler& operator=(Resampler const&) = delete;
@@ -63,12 +76,14 @@ namespace mbs::audio
         /// Starts over: drops what the FIFO holds and starts.
         void reset(Fifo& fifo);
 
-        /// A new fill target (BROWSER_AV_OFFSET_MS changed): the fill moves to it at once, with a
-        /// stretch of silence or a cut.
+        /// A new base target (BROWSER_AV_OFFSET_MS changed): the fill moves to it (plus what the
+        /// adaptive target added) at once, with a stretch of silence or a cut.
         void setTarget(Fifo& fifo, std::size_t targetFrames);
 
         [[nodiscard]] ResamplerStats const& stats() const { return _stats; }
         [[nodiscard]] std::size_t target() const { return static_cast<std::size_t>(_target); }
+        /// What the adaptive target adds to the base now (frames); 0 when it is fixed.
+        [[nodiscard]] double extraFrames() const { return _target - _base; }
 
         /// Frames waiting: the FIFO plus the resampler's input.
         [[nodiscard]] std::size_t fill(Fifo const& fifo) const { return fifo.available() + _pending.size() / _channels; }
@@ -76,10 +91,14 @@ namespace mbs::audio
     private:
         void dropOldest(Fifo& fifo, std::size_t frames);
         void align(Fifo& fifo);
+        void raise(std::size_t silenceFrames, std::uint64_t nowNs);
         std::size_t resample(Fifo& fifo, float* out, std::size_t frames, double ratio);
 
         std::size_t _channels;
-        double _target;
+        double _base;            // the configured target (plus BROWSER_AV_OFFSET_MS)
+        double _maxExtra;        // how far the adaptive target may rise above the base
+        double _target;          // base <= target <= base + maxExtra
+        std::uint64_t _lastUnderrunNs = 0;
         SRC_STATE_tag* _state = nullptr;
         std::vector<float> _pending; // FIFO frames handed to libsamplerate, not yet consumed
         std::vector<float> _scratch;

@@ -25,10 +25,13 @@ namespace mbs::audio
         constexpr std::size_t kLookAhead = 64;
     }
 
-    Resampler::Resampler(std::size_t channels, std::size_t targetFrames)
+    Resampler::Resampler(std::size_t channels, std::size_t targetFrames, std::size_t maxTargetFrames)
         : _channels(channels)
+        , _base(static_cast<double>(targetFrames))
+        , _maxExtra(maxTargetFrames > targetFrames ? static_cast<double>(maxTargetFrames - targetFrames) : 0.0)
         , _target(static_cast<double>(targetFrames))
     {
+        _stats.targetSeconds = _target / kSampleRate;
         int error = 0;
         _state = src_new(SRC_SINC_MEDIUM_QUALITY, static_cast<int>(channels), &error);
         if (_state == nullptr)
@@ -62,7 +65,10 @@ namespace mbs::audio
 
     void Resampler::setTarget(Fifo& fifo, std::size_t targetFrames)
     {
-        _target = static_cast<double>(targetFrames);
+        auto const extra = _target - _base;
+        _base = static_cast<double>(targetFrames);
+        _target = _base + extra;
+        _stats.targetSeconds = _target / kSampleRate;
         if (!_starting)
         {
             _lead = 0;
@@ -92,6 +98,20 @@ namespace mbs::audio
         }
         _integral = 0;
         _smoothed = -1;
+    }
+
+    void Resampler::raise(std::size_t silenceFrames, std::uint64_t nowNs)
+    {
+        _lastUnderrunNs = nowNs;
+        if (_maxExtra <= 0 || _target >= _base + _maxExtra)
+        {
+            return;
+        }
+        // The silence just played stands in for audio that is late: keep that audio (the debt is
+        // only dropped down to the target) and absorb the next stall of this size.
+        _target = std::min(_base + _maxExtra, _target + static_cast<double>(silenceFrames));
+        ++_stats.targetRaises;
+        _stats.targetSeconds = _target / kSampleRate;
     }
 
     std::size_t Resampler::resample(Fifo& fifo, float* out, std::size_t frames, double ratio)
@@ -199,6 +219,7 @@ namespace mbs::audio
                     _debtSinceNs = nowNs;
                 }
                 _debt += rest;
+                raise(rest, nowNs);
                 _stats.fillSeconds = static_cast<double>(current) / kSampleRate;
                 return;
             }
@@ -227,11 +248,24 @@ namespace mbs::audio
         _smoothed = _smoothed < 0 ? estimate : _smoothed + (estimate - _smoothed) * std::min(1.0, dt / kSmoothSeconds);
         _stats.fillSeconds = _smoothed / kSampleRate;
 
+        // The adaptive target falls back to the base once no underrun came for kHoldSeconds.
+        // The controller gets the decay as feed-forward, so the fill (the real latency, which the
+        // video delay follows) does not lag behind the target.
+        bool const adapted = _target > _base;
+        double feedForward = 0;
+        if (adapted && nowNs > _lastUnderrunNs + static_cast<std::uint64_t>(kHoldSeconds * 1e9))
+        {
+            _target = std::max(_base, _target - kDecayMsPerSecond * 1e-3 * kSampleRate * dt);
+            _stats.targetSeconds = _target / kSampleRate;
+            feedForward = kDecayMsPerSecond * 1e-3;
+        }
+
         // u > 0 when the FIFO is too full: consume input faster (ratio = output / input < 1).
+        // While the target is raised the controller may use the wider bound, to follow the decay.
         double const error = (_smoothed - _target) / kSampleRate;
-        double const bound = std::fabs(error) > kFarSeconds ? kMaxCorrectionFar : kMaxCorrection;
+        double const bound = std::fabs(error) > kFarSeconds || adapted ? kMaxCorrectionFar : kMaxCorrection;
         double integral = _integral + error * dt;
-        double u = kKp * error + kKi * integral;
+        double u = kKp * error + kKi * integral + feedForward;
         if (std::fabs(u) > bound)
         {
             u = std::copysign(bound, u);
@@ -253,6 +287,7 @@ namespace mbs::audio
                 _debtSinceNs = nowNs;
             }
             _debt += frames - produced;
+            raise(frames - produced, nowNs);
             _waiting = true;
         }
     }

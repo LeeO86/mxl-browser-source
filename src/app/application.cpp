@@ -377,6 +377,13 @@ namespace mbs::app
             double const videoMs = periodMs * (_cfg.frameLead + _cfg.framePipeline + (_renderRequested == cef::RenderMode::Gpu ? 1 : 0));
             es.videoDelayGrains = static_cast<std::uint32_t>(std::max(0L, std::lround((audioMs - videoMs) / periodMs)));
         }
+        if (_cfg.audioChannels > 0 && _cfg.audioBufferMaxMs > _cfg.audioBufferMs)
+        {
+            // Adaptive target (SPEC §6): the video delay follows what underruns add to the target, so
+            // the ring and the pool hold that many grains more.
+            es.audioMaxTargetFrames = static_cast<std::uint32_t>(_cfg.audioBufferMaxMs * 48);
+            es.videoDelayMaxGrains = es.videoDelayGrains + static_cast<std::uint32_t>(std::ceil((_cfg.audioBufferMaxMs - _cfg.audioBufferMs) / periodMs));
+        }
         switch (_cfg.onPageError)
         {
         case config::PageErrorMode::Transparent: es.onPageError = engine::Substitute::Transparent; break;
@@ -412,6 +419,7 @@ namespace mbs::app
             _engine->setEnabled(name == "key" ? engine::Flow::Key : name == "audio" ? engine::Flow::Audio : engine::Flow::Video, enabled);
         }
         log::info("mxl_ready", {{"domain", _domainDir}, {"domain_id", _domainId}, {"video_delay_grains", es.videoDelayGrains},
+                                   {"video_delay_max_grains", std::max(es.videoDelayGrains, es.videoDelayMaxGrains)}, {"audio_buffer_max_ms", std::max(_cfg.audioBufferMs, _cfg.audioBufferMaxMs)},
                                    {"frame_clock", es.internalFrameClock ? "internal" : "external"}, {"frame_clock_phase_ms", static_cast<int>(es.framePhaseNs / 1'000'000)}});
     }
 

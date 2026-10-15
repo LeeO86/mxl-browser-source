@@ -170,6 +170,11 @@
           "refId": "A"
         },
         {
+          "expr": "mxl_browser_source_audio_target_seconds{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} target",
+          "refId": "D"
+        },
+        {
           "expr": "rate(mxl_browser_source_audio_underruns_total{instance=~\"$instance\"}[5m])",
           "legendFormat": "{{instance}} underruns/s",
           "refId": "B"

@@ -73,7 +73,10 @@ namespace mbs::engine
     {
         // Every buffer is allocated here; nothing is allocated per frame (SPEC §18 rule 14).
         _settings.pipelineGrains = std::min<std::uint32_t>(_settings.pipelineGrains, 1);
-        _pool.resize(_settings.videoDelayGrains + _settings.pipelineGrains + 3);
+        _settings.videoDelayMaxGrains = std::max(_settings.videoDelayMaxGrains, _settings.videoDelayGrains);
+        _videoDelay = _videoDelayWanted = _settings.videoDelayGrains;
+        _videoDelayNow.store(_videoDelay);
+        _pool.resize(_settings.videoDelayMaxGrains + _settings.pipelineGrains + 3);
         _pending.reserve(_settings.pipelineGrains + 2);
         _poolBeginFrame.assign(_pool.size(), 0);
         _trace.resize(kTraceEvents);
@@ -92,12 +95,12 @@ namespace mbs::engine
             bgra[i] = 255;
         }
         convertInto(_black, _settings, bgra.data());
-        _ring.assign(_settings.videoDelayGrains + 1, kTransparent);
+        _ring.assign(_settings.videoDelayMaxGrains + 1, kTransparent);
 
         if (_settings.audioChannels > 0)
         {
             _fifo = std::make_unique<audio::Fifo>(_settings.audioChannels, 48000);
-            _resampler = std::make_unique<audio::Resampler>(_settings.audioChannels, _settings.audioTargetFrames);
+            _resampler = std::make_unique<audio::Resampler>(_settings.audioChannels, _settings.audioTargetFrames, _settings.audioMaxTargetFrames);
             _audioBuffer.assign(static_cast<std::size_t>(4800) * _settings.audioChannels, 0.f);
             _stats.audioPeakDbfs.assign(_settings.audioChannels, -120.0);
         }
@@ -414,11 +417,11 @@ namespace mbs::engine
     std::uint64_t Engine::nextVisibleIndex() const
     {
         // The BeginFrame of the current grain may still draw it; its paint is committed at the
-        // next tick and leaves the delay ring videoDelayGrains later.
+        // next tick and leaves the delay ring the video delay later.
         // Internal frame clock: Chromium's next BeginFrame is at T(k) + φ, the same place.
         auto const now = _clock.nowNs();
         auto const base = _frameClock && now >= _settings.framePhaseNs ? now - _settings.framePhaseNs : now;
-        return _clock.indexAt(base) + 1 + _settings.pipelineGrains + _settings.videoDelayGrains;
+        return _clock.indexAt(base) + 1 + _settings.pipelineGrains + _videoDelayNow.load();
     }
 
     EngineStats Engine::stats() const
@@ -431,6 +434,7 @@ namespace mbs::engine
         out.audioGapFrames = _audioGapFrames.load(std::memory_order_relaxed);
         out.audioGapsUnfilled = _audioGapsUnfilled.load(std::memory_order_relaxed);
         out.internalFrameClock = _frameClock != nullptr;
+        out.videoDelayGrains = _videoDelayNow.load(std::memory_order_relaxed);
         if (_frameClock)
         {
             out.frameClock = _frameClock->stats();
@@ -625,8 +629,20 @@ namespace mbs::engine
                 _current = kBlack;
             }
             // Hold keeps the last frame; converted paints wait in _pending for the page to be ready.
-            _ring[index % _ring.size()] = _current;
-            out = _ring[(index + 1) % _ring.size()]; // what was current videoDelayGrains ticks ago
+            // The delay moves one grain per tick towards the wanted one: one more is a repeat (the
+            // video holds while the audio played the silence that raised its target), one less a skip.
+            if (_videoDelayWanted > _videoDelay)
+            {
+                ++_videoDelay;
+            }
+            else if (_videoDelayWanted < _videoDelay)
+            {
+                --_videoDelay;
+            }
+            _videoDelayNow.store(_videoDelay, std::memory_order_relaxed);
+            auto const size = _ring.size();
+            _ring[index % size] = _current;
+            out = _ring[(index + size - _videoDelay) % size]; // what was current _videoDelay ticks ago
         }
         // `out` stays in the ring until the next tick, so the converter does not reuse it.
         auto const& frame = buffers(out);
@@ -702,6 +718,12 @@ namespace mbs::engine
         }
         _audioWasActive = active;
         _audioStreamSeen = stream;
+        if (_settings.videoDelayMaxGrains > _settings.videoDelayGrains)
+        {
+            // Lip sync: the video is delayed by what the adaptive target added, in whole grains.
+            auto const grains = std::lround(std::max(0.0, _resampler->extraFrames()) / static_cast<double>(frames));
+            _videoDelayWanted = std::min(_settings.videoDelayMaxGrains, _settings.videoDelayGrains + static_cast<std::uint32_t>(grains));
+        }
         if (_audioEnabled.load())
         {
             _outputs.writeAudio(end, out, frames);

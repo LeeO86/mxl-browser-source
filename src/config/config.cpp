@@ -60,6 +60,7 @@ namespace mbs::config
                 {"BROWSER_FILL", "straight", true, false, "straight or premultiplied fill when keyed"},
                 {"BROWSER_AUDIO_CHANNELS", "2", true, false, "0, 2, 8 or 16"},
                 {"BROWSER_AUDIO_BUFFER_MS", "60", true, false, "Audio FIFO target"},
+                {"BROWSER_AUDIO_BUFFER_MAX_MS", "300", true, false, "Adaptive audio target: underruns raise the FIFO target up to this, the video delay follows; at or below BROWSER_AUDIO_BUFFER_MS the target is fixed"},
                 {"BROWSER_AV_OFFSET_MS", "0", false, false, "Audio trim; positive delays audio"},
                 {"BROWSER_VIDEO_DELAY_GRAINS", "auto", true, false, "Video delay in grains for A/V alignment (auto or 0-10)"},
                 {"BROWSER_FRAME_LEAD", "1", true, false, "Video latency in periods assumed by BROWSER_VIDEO_DELAY_GRAINS=auto (1-2)"},
@@ -435,6 +436,7 @@ namespace mbs::config
             throw ConfigError("BROWSER_AUDIO_CHANNELS", "must be 0, 2, 8 or 16");
         }
         c.audioBufferMs = parseInt("BROWSER_AUDIO_BUFFER_MS", get("BROWSER_AUDIO_BUFFER_MS"), 20, 500);
+        c.audioBufferMaxMs = parseInt("BROWSER_AUDIO_BUFFER_MAX_MS", get("BROWSER_AUDIO_BUFFER_MAX_MS"), 20, 500);
         c.avOffsetMs = parseInt("BROWSER_AV_OFFSET_MS", get("BROWSER_AV_OFFSET_MS"), -500, 500);
         c.videoDelayGrains = lower(get("BROWSER_VIDEO_DELAY_GRAINS")) == "auto" ? -1 : parseInt("BROWSER_VIDEO_DELAY_GRAINS", get("BROWSER_VIDEO_DELAY_GRAINS"), 0, 10);
         c.frameLead = parseInt("BROWSER_FRAME_LEAD", get("BROWSER_FRAME_LEAD"), 1, 2);

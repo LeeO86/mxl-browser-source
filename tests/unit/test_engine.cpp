@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -686,4 +687,78 @@ TEST_CASE("when the stream stops the queued audio is played out; a new stream is
     CHECK(engine.stats().audio.underruns == 0);
     CHECK(engine.stats().audio.realigned == 0);
     CHECK(engine.stats().audioGaps == 0); // a new stream is a new timeline
+}
+
+TEST_CASE("the video delay follows the adaptive audio target one grain per tick, so lip sync holds")
+{
+    ManualClock clock(9000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    auto settings = small();
+    settings.videoDelayGrains = 1;
+    settings.audioMaxTargetFrames = 14400; // 300 ms
+    settings.videoDelayMaxGrains = 1 + 12;
+    Engine engine(settings, clock, outputs, metrics);
+    engine.setPageState(PageState::Ready);
+    engine.audioStreamStarted();
+    engine.setAudioActive(true);
+    engine.start();
+    PacketSource source;
+    // Every grain a new frame, numbered by its red value.
+    std::vector<std::vector<std::uint8_t>> fills;
+    std::uint64_t k = 9001;
+    std::uint64_t painted = 0;
+    auto tick = [&](int packets) {
+        auto const frame = solid(0, 0, static_cast<std::uint8_t>(10 + fills.size()), 255);
+        fills.push_back(fillOf(frame, true));
+        engine.paint(frame.data(), kWidth * 4, kWidth, kHeight);
+        waitConverted(engine, ++painted);
+        source.push(engine, packets);
+        clock.tick(k++);
+    };
+    for (int i = 0; i < 50; ++i)
+    {
+        tick(2);
+    }
+    CHECK(engine.stats().videoDelayGrains == 1);
+    // Chromium holds its audio for 200 ms, then delivers it at once.
+    for (int i = 0; i < 10; ++i)
+    {
+        tick(0);
+    }
+    source.push(engine, 20);
+    for (int i = 0; i < 30; ++i)
+    {
+        tick(2);
+    }
+    clock.release();
+    engine.stop();
+
+    auto const stats = engine.stats();
+    CHECK(stats.audio.underruns == 1);
+    CHECK(stats.audio.realigned == 0);
+    // The target rose by the silence (about 150 ms): the video waits as many grains more.
+    auto const extraGrains = std::lround((stats.audio.targetSeconds - 0.06) / 0.02);
+    CHECK(extraGrains >= 6);
+    CHECK(stats.videoDelayGrains == 1 + static_cast<std::uint32_t>(extraGrains));
+    CHECK(engine.nextVisibleIndex() >= k + stats.videoDelayGrains);
+    // The video held (repeats) while the delay grew; it never stepped back in time.
+    std::vector<int> shown;
+    for (auto const& grain : outputs.video)
+    {
+        auto const it = std::find(fills.begin(), fills.end(), grain.fill);
+        shown.push_back(it == fills.end() ? -1 : static_cast<int>(it - fills.begin()));
+    }
+    int repeats = 0;
+    for (std::size_t i = 1; i < shown.size(); ++i)
+    {
+        if (shown[i - 1] < 0)
+        {
+            continue;
+        }
+        CHECK(shown[i] >= shown[i - 1]);
+        CHECK(shown[i] <= shown[i - 1] + 1);
+        repeats += shown[i] == shown[i - 1] ? 1 : 0;
+    }
+    CHECK(repeats == extraGrains);
 }

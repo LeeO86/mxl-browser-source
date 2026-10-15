@@ -250,7 +250,8 @@ namespace mbs::app
                std::to_string(stats.tick.repeated + stats.tick.repeatedHold) + R"(,"missed":)" + std::to_string(stats.tick.missed) + R"(,"late_paints":)" +
                std::to_string(stats.latePaints) + R"(,"begin_frames":)" + std::to_string(stats.tick.beginFrames) + R"(},"audio":{"channels":)" +
                std::to_string(_cfg.audioChannels) + R"(,"stream":)" + (stream ? "true" : "false") + R"(,"drift_ppm":)" + std::to_string(stats.audio.driftPpm) +
-               R"(,"buffer_ms":)" + std::to_string(stats.audio.fillSeconds * 1000.0) + R"(,"peaks_dbfs":)" + peaks + R"(,"underruns":)" +
+               R"(,"buffer_ms":)" + std::to_string(stats.audio.fillSeconds * 1000.0) + R"(,"target_ms":)" + std::to_string(stats.audio.targetSeconds * 1000.0) +
+               R"(,"video_delay_grains":)" + std::to_string(stats.videoDelayGrains) + R"(,"peaks_dbfs":)" + peaks + R"(,"underruns":)" +
                std::to_string(stats.audio.underruns) + R"(,"overruns":)" + std::to_string(stats.audio.overruns) + R"(,"gaps":)" +
                std::to_string(stats.audioGaps) + R"(,"gap_ms":)" + std::to_string(static_cast<double>(stats.audioGapFrames) / 48.0) + R"(,"gaps_unfilled":)" +
                std::to_string(stats.audioGapsUnfilled) + R"(},"frame_clock":{"mode":)" + (stats.internalFrameClock ? R"("internal")" : R"("external")") +
@@ -279,6 +280,7 @@ namespace mbs::app
         m.setCounter("missed_grains_total", {}, static_cast<double>(s.tick.missed));
         m.setCounter("begin_frames_total", {}, static_cast<double>(s.tick.beginFrames));
         m.setCounter("late_paints_total", {}, static_cast<double>(s.latePaints));
+        m.set("video_delay_grains", {}, static_cast<double>(s.videoDelayGrains));
         m.clear("frame_clock");
         m.set("frame_clock", {{"mode", s.internalFrameClock ? "internal" : "external"}}, 1);
         if (s.internalFrameClock)
@@ -304,6 +306,8 @@ namespace mbs::app
             m.setCounter("audio_gap_seconds_total", {}, static_cast<double>(s.audioGapFrames) / 48000.0);
             m.set("audio_drift_ppm", {}, s.audio.driftPpm);
             m.set("audio_buffer_seconds", {}, s.audio.fillSeconds);
+            m.set("audio_target_seconds", {}, s.audio.targetSeconds);
+            m.setCounter("audio_target_raises_total", {}, static_cast<double>(s.audio.targetRaises));
             for (std::size_t c = 0; c < s.audioPeakDbfs.size(); ++c)
             {
                 m.set("audio_peak_dbfs", {{"channel", std::to_string(c + 1)}}, s.audioPeakDbfs[c]);

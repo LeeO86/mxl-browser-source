@@ -109,6 +109,7 @@ namespace mbs::config
         Fill fill = Fill::Straight;
         int audioChannels = 2;
         int audioBufferMs = 60;
+        int audioBufferMaxMs = 300; // adaptive target maximum; <= audioBufferMs: fixed
         int avOffsetMs = 0;
         int videoDelayGrains = -1; // -1 = auto
         int frameLead = 1;

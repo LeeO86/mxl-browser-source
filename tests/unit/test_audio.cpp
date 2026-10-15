@@ -301,3 +301,116 @@ TEST_CASE("resampler follows a drifting page clock without underruns")
         CHECK(worstStep < 0.04);
     }
 }
+
+namespace
+{
+    // Chromium's late bursts (docs/performance.md, M7): the source keeps producing, but nothing
+    // is delivered for `stallSeconds`; then everything held arrives at once with its own times.
+    struct StallRun
+    {
+        Fifo fifo{2, 48000};
+        Resampler resampler;
+        Source source;
+        std::vector<float> out = std::vector<float>(960 * 2);
+        double now = 0;
+        double heldUntil = -1;
+
+        explicit StallRun(std::size_t maxTarget)
+            : resampler(2, 2880, maxTarget)
+        {
+        }
+        void tick()
+        {
+            now += 0.02;
+            if (now >= heldUntil)
+            {
+                source.pushUntil(fifo, now);
+            }
+            resampler.produce(fifo, out.data(), 960, Source::ns(now));
+        }
+        void run(double seconds)
+        {
+            for (int i = 0; i < static_cast<int>(std::lround(seconds / 0.02)); ++i)
+            {
+                tick();
+            }
+        }
+        void stall(double seconds)
+        {
+            heldUntil = now + seconds;
+            run(seconds + 0.5);
+        }
+    };
+}
+
+TEST_CASE("adaptive target: a late burst raises the target by the silence played, keeps the late audio, and absorbs the next stall")
+{
+    StallRun fixed(0);
+    StallRun adaptive(14400); // up to 300 ms
+    for (auto* r : {&fixed, &adaptive})
+    {
+        r->run(5);
+        CHECK(r->resampler.stats().underruns == 0);
+        r->stall(0.2); // 200 ms without packets against about 60 ms in the FIFO
+        CHECK(r->resampler.stats().underruns == 1);
+    }
+    // Fixed: the late audio is dropped down to 60 ms, so the same stall makes the same hole again.
+    CHECK(fixed.resampler.stats().realigned > 4800);
+    CHECK(fixed.resampler.target() == 2880);
+    // Adaptive: the target rose by the silence played (about 140-160 ms) and the late audio was
+    // kept (at most what the fill stood above the target before the stall is dropped).
+    auto const silence = adaptive.resampler.stats().underrunFrames;
+    CHECK(silence > 6000);
+    CHECK(adaptive.resampler.target() == 2880 + silence);
+    CHECK(adaptive.resampler.extraFrames() == doctest::Approx(static_cast<double>(silence)));
+    CHECK(adaptive.resampler.stats().realigned < 480);
+    CHECK(adaptive.resampler.stats().targetRaises >= 1);
+    CHECK(adaptive.resampler.stats().targetSeconds == doctest::Approx((2880.0 + static_cast<double>(silence)) / 48000.0));
+
+    for (auto* r : {&fixed, &adaptive})
+    {
+        r->run(3);
+        r->stall(0.2);
+    }
+    CHECK(fixed.resampler.stats().underruns == 2);
+    CHECK(adaptive.resampler.stats().underruns == 1);
+    CHECK(adaptive.resampler.stats().underrunFrames == silence);
+}
+
+TEST_CASE("adaptive target: capped at the maximum, held for 10 s, then back to the base at 1 ms/s without an underrun")
+{
+    StallRun r(7200); // up to 150 ms
+    r.run(5);
+    r.stall(0.35);
+    CHECK(r.resampler.stats().underruns == 1);
+    CHECK(r.resampler.target() == 7200);
+    // What came late beyond the maximum is dropped as before.
+    CHECK(r.resampler.stats().realigned > 0);
+    r.run(9);
+    CHECK(r.resampler.target() == 7200);
+    // 90 ms back at 1 ms/s: 90 s after the hold.
+    r.run(46);
+    CHECK(r.resampler.target() > 2880 + 48 * 40);
+    CHECK(r.resampler.target() < 2880 + 48 * 50);
+    // The fill (the real latency, which the video delay follows) keeps up with the falling target.
+    CHECK(std::fabs(r.resampler.stats().fillSeconds - static_cast<double>(r.resampler.target()) / 48000.0) < 0.008);
+    r.run(60);
+    CHECK(r.resampler.target() == 2880);
+    r.run(30);
+    CHECK(r.resampler.stats().underruns == 1);
+    CHECK(r.resampler.stats().overruns == 0);
+    CHECK(std::fabs(r.resampler.stats().fillSeconds - 0.06) < 0.01);
+    CHECK(std::fabs(r.resampler.stats().driftPpm) < 600);
+}
+
+TEST_CASE("adaptive target: a new base (BROWSER_AV_OFFSET_MS) keeps what underruns added")
+{
+    StallRun r(14400);
+    r.run(5);
+    r.stall(0.2);
+    auto const extra = r.resampler.extraFrames();
+    REQUIRE(extra > 6000);
+    r.resampler.setTarget(r.fifo, 2880 + 960);
+    CHECK(r.resampler.extraFrames() == doctest::Approx(extra));
+    CHECK(r.resampler.target() == static_cast<std::size_t>(2880 + 960 + extra));
+}
