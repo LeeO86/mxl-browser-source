@@ -367,6 +367,134 @@
       ],
       "title": "Render, senders, registration",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 13,
+      "panels": [],
+      "title": "OGraf",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "id": 14,
+      "targets": [
+        {
+          "expr": "sum by (instance, action, result) (rate(mxl_browser_source_ograf_actions_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{instance}} {{action}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "title": "OGraf actions per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "id": 15,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (instance, action, le) (rate(mxl_browser_source_ograf_action_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "{{instance}} {{action}}",
+          "refId": "A"
+        }
+      ],
+      "title": "OGraf action time (p95, until the graphic settles)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "id": 16,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_ograf_layers{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} {{state}}",
+          "refId": "A"
+        }
+      ],
+      "title": "OGraf layers by state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "id": 17,
+      "targets": [
+        {
+          "expr": "mxl_browser_source_ograf_graphics{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} graphics",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(mxl_browser_source_ograf_uploads_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} uploads {{result}} (5 min)",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(mxl_browser_source_ograf_restores_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{instance}} restores {{result}} (5 min)",
+          "refId": "C"
+        },
+        {
+          "expr": "increase(mxl_browser_source_navigation_blocked_total{instance=~\"$instance\",reason=\"ograf_local\"}[5m])",
+          "legendFormat": "{{instance}} blocked (network=local, 5 min)",
+          "refId": "D"
+        }
+      ],
+      "title": "OGraf library, uploads and restores",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 39,

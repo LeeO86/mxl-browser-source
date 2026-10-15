@@ -22,11 +22,23 @@ namespace mbs::ograf
             res.body = body.serialize();
         }
 
+        char const* titleOf(int status)
+        {
+            switch (status)
+            {
+            case 401: return "Unauthorized";
+            case 404: return "Not Found";
+            case 405: return "Method Not Allowed";
+            case 409: return "Conflict";
+            default: return "Bad Request";
+            }
+        }
+
         void problem(ops::HttpResponse& res, int status, std::string const& detail)
         {
             picojson::object o;
             o["status"] = picojson::value(static_cast<double>(status));
-            o["title"] = picojson::value(status == 404 ? "Not Found" : status == 409 ? "Conflict" : status == 405 ? "Method Not Allowed" : "Bad Request");
+            o["title"] = picojson::value(titleOf(status));
             o["detail"] = picojson::value(detail);
             json(res, status, picojson::value(o));
         }
@@ -105,10 +117,11 @@ namespace mbs::ograf
             {
                 return picojson::value(o);
             }
+            auto const failed = ctx.rendererError ? ctx.rendererError() : std::string{};
             auto const why = ctx.rendererProblem ? ctx.rendererProblem() : std::string{};
             picojson::object status;
-            status["status"] = picojson::value(why.empty() ? "OK" : "WARNING");
-            status["message"] = picojson::value(why.empty() ? std::string("Renderer is running") : why);
+            status["status"] = picojson::value(!failed.empty() ? "ERROR" : why.empty() ? "OK" : "WARNING");
+            status["message"] = picojson::value(!failed.empty() ? failed : why.empty() ? std::string("Renderer is running") : why);
             o["status"] = picojson::value(status);
             o["customActions"] = picojson::value(picojson::array{});
             auto const r = ctx.library.render();
@@ -117,13 +130,17 @@ namespace mbs::ograf
             res["height"] = picojson::value(static_cast<double>(r.height));
             o["renderCharacteristics"] = picojson::value(picojson::object{
                 {"resolution", picojson::value(res)}, {"frameRate", picojson::value(r.frameRate)}, {"accessToPublicInternet", picojson::value(r.internet)}});
+            // A shallow GDD object (server-api.yaml RenderTargetSchema). The defaults let a GDD form
+            // (e.g. ograf-form's getDefaultDataFromSchema in SuperFlyTV's controller) start at layer 1.
             picojson::object layerSchema;
             layerSchema["type"] = picojson::value("integer");
+            layerSchema["title"] = picojson::value("Layer");
+            layerSchema["default"] = picojson::value(1.0);
             layerSchema["minimum"] = picojson::value(1.0);
             layerSchema["maximum"] = picojson::value(static_cast<double>(kLayers));
             o["renderTargetSchema"] = picojson::value(picojson::object{{"type", picojson::value("object")},
                 {"properties", picojson::value(picojson::object{{"layer", picojson::value(layerSchema)}})},
-                {"required", picojson::value(picojson::array{picojson::value("layer")})}});
+                {"required", picojson::value(picojson::array{picojson::value("layer")})}, {"default", targetJson(1)}});
             picojson::array targets;
             for (auto const& l : ctx.layers.snapshot())
             {
@@ -212,7 +229,20 @@ namespace mbs::ograf
                 picojson::object metadata;
                 metadata["createdAt"] = picojson::value(graphic->createdAt);
                 metadata["updatedAt"] = picojson::value(graphic->updatedAt);
-                return json(res, 200, picojson::value(picojson::object{{"graphic", graphic->manifest}, {"metadata", picojson::value(metadata)}, {"v_info", withUse(ctx, *graphic)}}));
+                auto out = picojson::value(picojson::object{{"graphic", graphic->manifest}, {"metadata", picojson::value(metadata)}, {"v_info", withUse(ctx, *graphic)}});
+                json(res, 200, out);
+                // `graphic` keeps the manifest file's own key order (picojson sorts keys; a form shows
+                // fields without `order` in the manifest's order): the file's text replaces it, when it
+                // still parses to the same manifest.
+                auto const raw = readFile(ctx.library.filePath(graphic->package, graphic->manifestPath));
+                picojson::value check;
+                if (raw && parseJson(check, *raw).empty() && check == graphic->manifest)
+                {
+                    out.get<picojson::object>().erase("graphic");
+                    auto const rest = out.serialize(); // {"metadata":…,"v_info":…}
+                    res.body = "{\"graphic\":" + *raw + "," + rest.substr(1);
+                }
+                return;
             }
             if (p.size() == 2 && req.method == "DELETE")
             {
@@ -312,6 +342,17 @@ namespace mbs::ograf
                 }
                 for (auto const& f : list)
                 {
+                    if (!f.is<picojson::object>())
+                    {
+                        continue;
+                    }
+                    auto const text = [&](char const* key) { return f.get(key).is<std::string>() ? f.get(key).to_str() : std::string{}; };
+                    // A part that is set but not a string matches nothing (instead of anything).
+                    if ((f.contains("graphicId") && !f.get("graphicId").is<std::string>()) ||
+                        (f.contains("graphicInstanceId") && !f.get("graphicInstanceId").is<std::string>()))
+                    {
+                        continue;
+                    }
                     std::optional<int> layer;
                     if (f.contains("renderTarget"))
                     {
@@ -321,8 +362,7 @@ namespace mbs::ograf
                             continue;
                         }
                     }
-                    for (auto const& l : ctx.layers.clearWhere(layer, f.get("graphicId").is<std::string>() ? f.get("graphicId").to_str() : "",
-                             f.get("graphicInstanceId").is<std::string>() ? f.get("graphicInstanceId").to_str() : ""))
+                    for (auto const& l : ctx.layers.clearWhere(layer, text("graphicId"), text("graphicInstanceId")))
                     {
                         cleared.push_back(picojson::value(picojson::object{{"renderTarget", targetJson(l.number)}, {"graphicInstanceId", picojson::value(l.instanceId)}}));
                     }
@@ -377,6 +417,15 @@ namespace mbs::ograf
     bool isUploadRequest(ops::HttpRequest const& req)
     {
         return req.method == "POST" && req.path == "/api/v1/ograf/graphics";
+    }
+
+    void unauthorized(ApiContext const& ctx, ops::HttpRequest const& req, ops::HttpResponse& res)
+    {
+        if (!req.path.starts_with("/api/v1/"))
+        {
+            cors(ctx, req, res);
+        }
+        problem(res, 401, "token required (Authorization: Bearer …)");
     }
 
     void handleOgraf(ApiContext& ctx, ops::HttpRequest const& req, ops::HttpResponse& res)

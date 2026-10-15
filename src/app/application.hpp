@@ -127,6 +127,7 @@ namespace mbs::app
         void ografPageGone();
         void ografChanged();
         [[nodiscard]] std::string ografProblem() const;
+        [[nodiscard]] std::string ografError() const;
         void injectAfterLoad();
         void queueTemplateCall(std::string const& js);
         void setPage(PageStatus status, std::string const& reason);

@@ -1,8 +1,9 @@
-# OGraf in mxl-browser-source (design, M0)
+# OGraf in mxl-browser-source
 
-Status: design approved (M0 review, 2026-10-13); M1 implemented on `feat/ograf` (library, renderer,
-Server API, mode, restore). Base: 1.2.0 (main `df529cf`). Target: 1.3.0. The review's answers are folded in
-below; §14 lists them.
+Status: **implemented** (M0–M4 on `feat/ograf`, 2026-10-14): library, renderer, Server API, mode and restore
+(M1), the Graphics tab, the schema form and the `ograf` widget (M2), Server API interop (M3), the 2 h soak and
+the docs (M4, `docs/performance.md`). Base: 1.2.0 (main `df529cf`). Target: 1.3.0. The design review's answers
+are folded in below; §14 lists them.
 
 This adds EBU OGraf v1 to the browser source. Today the function shows one web page. After this change it can
 also host up to 8 OGraf graphics on top of each other, with a graphics library, a controller tab, an `ograf`
@@ -256,8 +257,54 @@ examples. With `BROWSER_API_TOKEN` set it needs the bearer token, like `/api/v1`
 
 - **CORS:** off by default. `BROWSER_OGRAF_CORS_ORIGINS` (a space or comma list of origins, never `*`) adds the
   headers the spec suggests, for those origins only, as `WIDGET_FRAME_ANCESTORS` does for the widgets.
-- **Interop:** M3 runs SuperFlyTV's `ograf-server` default controller (its UI) against `/ograf/v1`, plus the
-  EBU `renderer-test` graphic.
+- **Interop:** see below.
+
+### Error codes
+
+The spec lists 200, 404, 500 and 550 for the renderer routes. Two more are kept on purpose instead of being
+folded into 500:
+
+| Code | When | Why not 500 |
+| --- | --- | --- |
+| **409** | no renderer page: mode `page`, or the renderer is loading or recovering after a crash or hang | nothing failed; the action is refused in this state and works once the mode is `ograf` and the page is up. A controller can show "renderer not ready" and retry |
+| **504** | the graphic's promise did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (10 s) | the graphic is not known to have failed: the layer keeps its last state with `pending` set, and the action may still complete |
+
+Both are `ErrorResponse` objects (RFC 7807) with a `detail`. A strict controller that accepts only the spec's
+codes treats them as unexpected: SuperFlyTV's default controller logs the answer and throws, the action shows
+as failed in its UI, and the next action works as usual (seen in M3). Our own UI and widget show the `detail`.
+
+### Interop (M3, 2026-10-14)
+
+Checked against the EBU `server-api.yaml` (v1) field by field, and live with SuperFlyTV's `ograf-server` default
+controller (`packages/controller-default`, commit 5210f9c) in a browser: it lists the graphics, adds a graphic
+(the render target from our schema), loads, plays, updates, runs custom actions (l3rd-name *Highlight*,
+scoreboard *Goal (Home)*/*Goal (Away)*, seen on the output), stops and clears it on a layer. All calls 200;
+the layer goes `ready` → `on` (step 0) → `stopped` → `empty`. It needs `BROWSER_OGRAF_CORS_ORIGINS` set to the
+controller's origin; it sends `Content-Type: application/json` on every request, so even a GET has a preflight.
+
+Fixed on the way:
+
+- `renderTargetSchema` has `default: {"layer": 1}` (and the property `default: 1`, `title`). Without it the
+  controller's GDD form started at `{"layer": 0}` and every load answered 404.
+- `status.status` is `ERROR` when the renderer page failed to load or crashed (it was never `ERROR`).
+- A 401 on `/ograf/v1` is an `ErrorResponse` with the CORS headers (a browser controller saw only "Failed to fetch").
+- A clear filter whose `graphicId`/`graphicInstanceId` is not a string matches nothing (it matched everything).
+- `GET /graphics/{id}` returns the manifest in its file's key order (picojson sorted the keys; forms showed
+  fields without `order` alphabetically).
+
+Known differences, kept:
+
+- **409 and 504** (see "Error codes" above). The controller treats them as unexpected (it logs the answer and
+  throws; nothing breaks). We keep them: they say what happened, 500 would not.
+- **`manifest` in `GET /graphics/{id}`.** The spec lists `manifest` as required next to `graphic` but defines no
+  such property; we (and SuperFlyTV's server) send `graphic` and `metadata` only.
+- **`currentStep`.** The Server API marks it required in the playAction answer; the graphic spec says it is
+  `undefined` after the last step or with `stepCount` 0. We pass on what the graphic returns.
+- **Controller-only routes.** The controller uploads through `POST /serverApi/internal/graphics/graphic`
+  (multipart, SuperFlyTV's own) and loads custom GUIs from `metadata.content.url`. We have neither: upload in our
+  UI or `POST /api/v1/ograf/graphics` (§4); the controller logs "No metadata.content.url" and goes on.
+- **Timeouts.** The controller aborts every request after 3 s; a `load()` that takes longer shows as failed there
+  although the layer loads.
 
 ## 7. Own API and events (for the UI and the widget)
 
@@ -384,7 +431,8 @@ The Grafana dashboard gets one row with these metrics.
   - the EBU examples on 8 layers, fill+key checked in the multiviewer and by grain reads, including alpha
     edges;
   - a soak (M4): hours of load / play / update / stop on 8 layers, with no leaks (`cef_processes_resident_bytes`
-    flat), no late or missed grains, and the paint latency recorded.
+    flat), no late or missed grains, and the paint latency recorded. Done: `tests/integration/ograf_soak.py`,
+    2 h on 2026-10-14, results in `docs/performance.md`.
 
 ## 13. Milestones (from the brief)
 

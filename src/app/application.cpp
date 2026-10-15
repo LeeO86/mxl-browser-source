@@ -508,7 +508,7 @@ namespace mbs::app
             _ografLayers->loadSaved(); // back loaded, not played (docs/ograf.md §3)
         }
         _ografApi = std::make_unique<ograf::ApiContext>(ograf::ApiContext{*_ografLibrary, *_ografLayers, _cfg.label, MBS_VERSION, _cfg.ografCorsOrigins,
-            [this] { return ografProblem(); }, &_metrics});
+            [this] { return ografProblem(); }, [this] { return ografError(); }, &_metrics});
         ografChanged();
         _engine->setRequestFrame([this] {
             if (_browserReady.load())
@@ -1220,6 +1220,20 @@ namespace mbs::app
         }
         _metrics.set("ograf_graphics", {}, static_cast<double>(_ografLibrary->list().size()));
         broadcastEvent(R"({"type":"ograf","layers":)" + picojson::value(layers).serialize() + "}");
+    }
+
+    std::string Application::ografError() const
+    {
+        if (_doc->source().mode != "ograf")
+        {
+            return {};
+        }
+        std::lock_guard lock{_pageMutex};
+        if (_page == PageStatus::Error || _page == PageStatus::Crashed)
+        {
+            return "the renderer page failed: " + (_pageReason.empty() ? std::string(statusName(_page)) : _pageReason);
+        }
+        return {};
     }
 
     std::string Application::ografProblem() const

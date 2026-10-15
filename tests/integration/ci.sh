@@ -63,7 +63,9 @@ since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker stop -t 20 "$NAME" >/dev/null
 code="$(docker inspect -f '{{.State.ExitCode}}' "$NAME")"
 [[ "$code" == 143 ]] || { echo "SIGTERM: exit $code, expected 143" >&2; exit 1; }
-docker logs --since "$since" "$NAME" 2>&1 | grep -q domain_removed || { echo "SIGTERM: own domain not removed" >&2; exit 1; }
+# Read the logs first: with pipefail, `docker logs | grep -q` fails when grep exits before docker has written everything.
+logs="$(docker logs --since "$since" "$NAME" 2>&1)"
+grep -q domain_removed <<<"$logs" || { echo "SIGTERM: own domain not removed" >&2; exit 1; }
 status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3211/x-nmos/query/v1.3/nodes/$NODE")"
 [[ "$status" == 404 ]] || { echo "SIGTERM: node still in the registry ($status)" >&2; exit 1; }
 echo "lifecycle: registered, SIGTERM -> exit 143, node removed from the registry, own domain removed"

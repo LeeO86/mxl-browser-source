@@ -1,6 +1,6 @@
 # mxl-browser-source
 
-Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writes it as MXL flows: video (v210, optionally with a key as v210a or a separate key flow) and audio (float32, 48 kHz). One BeginFrame per MXL grain index keeps the page frame-locked to house time (TAI). Senders register with NMOS (IS-04/IS-05, BCP-007-03) and are routed like every other media function of the MXL PoC platform. An operator sees a preview and can interact with the page from the web UI, like the "Interact" window of the OBS Browser Source; HTML graphics templates are driven CasparCG-style (`play`, `stop`, `next`, `update`).
+Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writes it as MXL flows: video (v210, optionally with a key as v210a or a separate key flow) and audio (float32, 48 kHz). One BeginFrame per MXL grain index keeps the page frame-locked to house time (TAI). Senders register with NMOS (IS-04/IS-05, BCP-007-03) and are routed like every other media function of the MXL PoC platform. An operator sees a preview and can interact with the page from the web UI, like the "Interact" window of the OBS Browser Source; HTML graphics templates are driven CasparCG-style (`play`, `stop`, `next`, `update`), and EBU OGraf v1 graphics play on up to 8 layers with a graphics library, a controller tab, an `ograf` widget and the OGraf Server API.
 
 **Status: 1.2.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
 
@@ -40,6 +40,11 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_DEVTOOLS` | `false` | Chrome DevTools through `/devtools/` (never the internal port) |
 | `BROWSER_PROFILE` | `ephemeral` | `persistent` keeps cookies and logins in `/config/profile` across restarts |
 | `BROWSER_WEBAUTHN` | `false` | `true` offers WebAuthn (passkeys) to pages; see sign-in pages below |
+| `BROWSER_OGRAF_DIR` | `<state>/ograf` | the OGraf graphics library (on the `/config` volume) |
+| `BROWSER_OGRAF_UPLOAD_MAX_MB` | `256` | largest graphics ZIP (unpacked at most 4×) |
+| `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | `10000` | how long an OGraf action waits for the graphic; then 504 |
+| `BROWSER_OGRAF_NETWORK` | `local` | in mode `ograf`: `local` (the library only), `any` (the URL policy), or a comma list of extra hosts |
+| `BROWSER_OGRAF_CORS_ORIGINS` | – | origins (space or comma list, never `*`) that may call `/ograf/v1` from a browser |
 
 The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
@@ -50,6 +55,20 @@ Operator screens can frame the interaction window as a widget: `GET /widgets` li
 **Sign-in pages (Zscaler, Microsoft Entra ID).** Windowless CEF cannot show Chromium's WebAuthn dialog (passkeys, security keys, the QR code for a phone), so a page that asks for a passkey would hang. WebAuthn is therefore hidden from pages (`BROWSER_WEBAUTHN=false`), and Entra offers Authenticator push, a code or a password instead. Sign in once in the interaction window; with `BROWSER_PROFILE=persistent` the session survives restarts until the identity provider ends it. A tenant that allows passkeys only cannot sign in here: ask for another method, or for the graphics hosts to bypass the proxy sign-in.
 
 Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL cannot start, 78 invalid configuration or the own domain not on a tmpfs, 143 SIGTERM/SIGINT (also when the shutdown budget ran out).
+
+### OGraf graphics
+
+The source field `mode` chooses what the browser shows: `page` (the default, `url` as before) or `ograf`, a built-in renderer with 8 layers for [EBU OGraf v1](https://ograf.ebu.io/) graphics (layer 8 on top, one graphic per layer). The output stays one video flow (fill and key) and one audio flow. The design and every rule are in [`docs/ograf.md`](docs/ograf.md).
+
+- **Library:** upload a ZIP with one or more `*.ograf.json` manifests in the Graphics tab (button or drag and drop) or with `POST /api/v1/ograf/graphics` (body: the ZIP). Each manifest is checked against the embedded v1 schemas; a ZIP is accepted or refused as a whole, the same `id` replaces a graphic (a layer keeps the old version until it is cleared). The library lives in `BROWSER_OGRAF_DIR` on the `/config` volume; the config export does not include it.
+- **Graphics tab:** the output preview, the 8 layers with their state (ON AIR, ready, stopped, error) and Load, Play, Next, Stop, Clear; a form built from the graphic's schema (the GDD types, nested objects and lists, required fields) for Load and Update; one button per custom action. Leaving mode `ograf` with a graphic loaded asks first.
+- **Widget `ograf`:** `GET /widget/ograf[?layers=1,2&theme=dark|light|transparent]` is the tab's preview, layers and form for the listed layers (`layers`: a comma list of 1…8, default all), without the library or the mode switch; `min_size` 640×480. `GET /widgets` lists it next to `interaction`.
+- **Server API:** the OGraf Server API v1 at `/ograf/v1` (one renderer `main`, render targets `{"layer": 1…8}`), checked with SuperFlyTV's `ograf-server` controller. A browser controller on another origin needs `BROWSER_OGRAF_CORS_ORIGINS`. Besides the spec's codes it answers 409 when there is no renderer page and 504 when a graphic does not settle in time (`docs/ograf.md` §6). The layer states are also at `GET /api/v1/ograf/layers` and on `/api/v1/events`.
+- **Offline:** in mode `ograf` the renderer and the graphics may load only from the library (`BROWSER_OGRAF_NETWORK=local`); everything else is refused and counted (`navigation_blocked_total{reason="ograf_local"}`). Graphics that fetch data from an internal server need its host in the list.
+- **Recovery:** after a renderer crash the layers come back at their step without animation; after a restart they come back loaded, not played.
+- **Metrics:** `ograf_actions_total{action,result}`, `ograf_action_seconds`, `ograf_layers{state}`, `ograf_graphics`, `ograf_uploads_total`, `ograf_restores_total`. A 2 h soak with 8 layers is in [`docs/performance.md`](docs/performance.md).
+
+The CasparCG template API stays and works in mode `page` only (409 in mode `ograf`).
 
 ### Docker Compose
 
@@ -63,7 +82,7 @@ Exit codes: 0 `--help`/`--version`, 75 a port, the state directory, CEF or MXL c
 
 ### Metrics and Grafana
 
-`/metrics` has grains, repeats and misses, paint latency, conversion and commit lateness, audio, page state, crashes, interaction, sender and registration state, and CPU and memory: `process_cpu_seconds_total` and `process_resident_memory_bytes` of the process, `mxl_browser_source_cef_processes_cpu_seconds_total` and `_resident_bytes` of the CEF processes below it. The Grafana dashboard is `deploy/grafana/mxl-browser-source.json`.
+`/metrics` has grains, repeats and misses, paint latency, conversion and commit lateness, audio, page state, crashes, interaction, sender and registration state, and CPU and memory: `process_cpu_seconds_total` and `process_resident_memory_bytes` of the process, `mxl_browser_source_cef_processes_cpu_seconds_total` and `_resident_bytes` of the CEF processes below it. The Grafana dashboard is `deploy/grafana/mxl-browser-source.json` (with an OGraf row: actions, action time, layers, library, uploads, restores and blocked requests).
 
 Image size: about 900 MB uncompressed (CEF's `libcef.so` stripped of its debug symbols; the fonts take about 440 MB with the system libraries).
 
