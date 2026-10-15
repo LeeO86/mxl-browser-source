@@ -42,8 +42,11 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_WEBAUTHN` | `false` | `true` offers WebAuthn (passkeys) to pages; see sign-in pages below |
 | `BROWSER_WEBGPU` | `false` | `true` offers WebGPU (Dawn) to pages; off, `navigator.gpu.requestAdapter()` answers null without starting Dawn |
 | `BROWSER_FRAME_PIPELINE` | `1` | a paint that misses its tick is shown at the next one instead of held (one period more latency); `0` as in 1.2.0 |
+| `BROWSER_FRAME_CLOCK` | `internal` | `internal`: Chromium paces the page with its own frame clock at the house rate, phase-locked to TAI (smooth `<video>`, SPEC §2.4); 25 and 50 Hz formats, 59.94 and 29.97 fall back to `external`. `external`: one BeginFrame per grain, as in 1.2.0 |
+| `BROWSER_FRAME_CLOCK_PHASE_MS` | `0` | internal frame clock: its BeginFrames this many ms after each grain start |
 | `BROWSER_REALTIME` | `true` | tick and converter threads `SCHED_FIFO` when the container allows it: give it `--ulimit rtprio=10` (Compose `ulimits: {rtprio: 10}`); `--cap-add SYS_NICE` alone does not help a non-root process (SPEC §2.2) |
 | `BROWSER_CONVERT_THREADS` | `4` | threads that convert one frame (1–16) |
+| `BROWSER_AUDIO_BUFFER_MAX_MS` | `300` | adaptive audio buffer: when Chromium delivers audio late, the 60 ms target (`BROWSER_AUDIO_BUFFER_MS`) rises by the silence played, up to this, and the video delay follows; it falls back at 1 ms/s after 10 s without an underrun. At or below `BROWSER_AUDIO_BUFFER_MS` the target is fixed (SPEC §6) |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | the OGraf graphics library (on the `/config` volume) |
 | `BROWSER_OGRAF_UPLOAD_MAX_MB` | `256` | largest graphics ZIP (unpacked at most 4×) |
 | `BROWSER_OGRAF_ACTION_TIMEOUT_MS` | `10000` | how long an OGraf action waits for the graphic; then 504 |

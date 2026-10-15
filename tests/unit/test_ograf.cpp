@@ -3,10 +3,13 @@
 // the Server API routes.
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
+#include <thread>
 
 #include "miniz/miniz.h"
 #include "ograf/files.hpp"
@@ -215,7 +218,7 @@ TEST_CASE("ograf: the library takes a ZIP as a whole, replaces by id, keeps a pa
 
     // Replace "one" while a layer uses the old package: both packages stay until collected.
     auto const oldPackage = one->package;
-    auto const replaced = lib.addZip(makeZip(t.path, {{"one.ograf.json", manifest("one")}, {"graphic.mjs", kRuntime}}), {oldPackage});
+    auto const replaced = lib.addZip(makeZip(t.path, {{"one.ograf.json", manifest("one")}, {"graphic.mjs", kRuntime}}), [&] { return std::set<std::string>{oldPackage}; });
     REQUIRE(replaced.status == 200);
     CHECK(replaced.body.get("graphics").get<picojson::array>()[0].get("replaced").get<bool>());
     CHECK(lib.find("one")->package != oldPackage);
@@ -305,6 +308,86 @@ TEST_CASE("ograf: layers keep the state, merge updates, ignore stale answers")
     auto const cleared = layers.clearWhere(std::nullopt, "g", "");
     CHECK(cleared.size() == 2);
     CHECK_FALSE(layers.anyLoaded());
+}
+
+TEST_CASE("ograf: the in-use packages are asked after unpacking, and a layer's package is never collected")
+{
+    TempDir t;
+    Library lib((t.path / "lib").string(), RenderInfo{}, ZipLimits{});
+    lib.load();
+    auto const zip = makeZip(t.path, {{"g.ograf.json", manifest("g")}, {"graphic.mjs", kRuntime}});
+    REQUIRE(lib.addZip(zip, {}).status == 200);
+
+    // The callback runs once the new package is in place, under the library's lock.
+    bool asked = false;
+    auto const replaced = lib.addZip(zip, [&] {
+        asked = true;
+        std::size_t packages = 0;
+        for ([[maybe_unused]] auto const& e : fs::directory_iterator(lib.packagesDir()))
+        {
+            ++packages;
+        }
+        CHECK(packages == 2); // the old one and the one just unpacked
+        return std::set<std::string>{};
+    });
+    REQUIRE(replaced.status == 200);
+    CHECK(asked);
+
+    // Loads race with uploads that replace the graphic: every layer keeps a package that exists.
+    FakeRenderer page;
+    LayerSet layers(page, lib, (t.path / "layers.json").string(), RenderInfo{});
+    std::atomic<bool> done{false};
+    std::atomic<int> uploadsOk{0};
+    std::thread uploader([&] {
+        for (int i = 0; i < 40; ++i)
+        {
+            if (lib.addZip(zip, [&] { return layers.packagesInUse(); }).status == 200)
+            {
+                ++uploadsOk;
+            }
+        }
+        done = true;
+    });
+    int missing = 0;
+    int loads = 0;
+    while (!done.load())
+    {
+        if (layers.load(1, "g", {}).status == 200)
+        {
+            ++loads;
+            auto const l = layers.snapshot()[0];
+            if (!lib.findInPackage(l.package, "g") || !fs::exists(fs::path(lib.packagesDir()) / l.package))
+            {
+                ++missing;
+            }
+        }
+    }
+    uploader.join();
+    CHECK(uploadsOk == 40);
+    CHECK(loads > 0);
+    CHECK(missing == 0);
+}
+
+TEST_CASE("ograf: a restore whose graphic is gone marks the layer as an error")
+{
+    TempDir t;
+    Library lib((t.path / "lib").string(), RenderInfo{}, ZipLimits{});
+    lib.load();
+    REQUIRE(lib.addZip(makeZip(t.path, {{"g.ograf.json", manifest("g")}, {"graphic.mjs", kRuntime}}), {}).status == 200);
+    FakeRenderer page;
+    LayerSet layers(page, lib, (t.path / "layers.json").string(), RenderInfo{});
+    std::vector<bool> restored;
+    layers.onRestore([&](bool ok) { restored.push_back(ok); });
+    REQUIRE(layers.load(2, "g", {}).status == 200);
+    lib.remove("g", {}); // deleted with nothing reported in use: the package goes
+    REQUIRE_FALSE(lib.findInPackage(layers.snapshot()[1].package, "g"));
+    page.calls.clear();
+    layers.pageLost();
+    layers.restore(false);
+    CHECK(page.calls.empty());
+    CHECK(layers.snapshot()[1].state == "error");
+    CHECK(layers.snapshot()[1].error.find("no longer in the library") != std::string::npos);
+    CHECK(restored == std::vector<bool>{false});
 }
 
 TEST_CASE("ograf: Server API routes")

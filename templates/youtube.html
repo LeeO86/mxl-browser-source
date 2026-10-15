@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- YouTube cadence test (docs/performance.md, M6): embeds ?v=<video id> full-frame with sound.
+     YouTube refuses an embed opened as the top-level page ("embedder.identity.missing.referrer",
+     player error 153): the player must run in an iframe of a page that sends a Referer. This page
+     is that embedder. ?vq= asks for a quality (default hd1080), ?start= seconds. -->
+<html><head><meta charset="utf-8"><title>youtube</title>
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{position:fixed;left:0;top:0;width:100vw;height:100vh;border:0}</style></head>
+<body>
+<script>
+const q = new URLSearchParams(location.search);
+const p = new URLSearchParams({autoplay: "1", controls: "0", playsinline: "1", enablejsapi: "1", rel: "0",
+  vq: q.get("vq") || "hd1080", origin: location.origin});
+if (q.get("start")) p.set("start", q.get("start"));
+const f = document.createElement("iframe");
+f.allow = "autoplay; encrypted-media; picture-in-picture";
+f.referrerPolicy = "strict-origin-when-cross-origin";
+f.src = "https://www.youtube.com/embed/" + encodeURIComponent(q.get("v") || "3o0T4z6oT4Y") + "?" + p;
+document.body.appendChild(f);
+</script>
+</body></html>

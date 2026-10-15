@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Test reader for the frame-accuracy and A/V tests (SPEC §17).
 //
-//   grain_reader counter --domain DIR --flow UUID --width W --seconds S
+//   grain_reader counter --domain DIR --flow UUID --width W --seconds S [--out FILE]
 //     Decodes counter.html's 32-bit bar code (top 16 lines, bit i = 60 px block) from every
-//     grain and reports advances (+1), repeats (+0) and skips (> +1).
+//     grain and reports advances (+1), repeats (+0) and skips (> +1). The test clips
+//     (tests/media/make_clips.sh) carry the same bar code with the video frame number. --out
+//     writes "grain_index value" per grain.
+//   grain_reader audio --domain DIR --flow UUID --seconds S [--tone 1000] [--out FILE.f32]
+//     Records channel 1 of an audio flow carrying a continuous tone (tone.html, the test
+//     clips) and reports gaps (1 ms windows below -40 dBFS inside the tone) and phase jumps of
+//     the tone (> 10 degrees between 10 ms blocks without a gap: a splice). --out writes the
+//     samples as raw float32.
 //   grain_reader change --domain DIR --flow UUID --width W --x X --y Y --seconds S
 //     Index of the first grain whose luma at (X, Y) differs from the head grain's ("CHANGE grain=").
 //   grain_reader sample --domain DIR --flow UUID --width W --height H --x X --y Y
@@ -180,8 +187,9 @@ namespace
         return rc;
     }
 
-    int counter(mxlInstance instance, std::string const& flow, int width, int seconds)
+    int counter(mxlInstance instance, std::string const& flow, int width, int seconds, std::string const& outPath)
     {
+        FILE* out = outPath.empty() ? nullptr : std::fopen(outPath.c_str(), "w");
         auto* reader = openReader(instance, flow);
         if (reader == nullptr)
         {
@@ -213,6 +221,10 @@ namespace
                 }
             }
             ++grains;
+            if (out != nullptr)
+            {
+                std::fprintf(out, "%llu %u\n", static_cast<unsigned long long>(index), value);
+            }
             if (last >= 0)
             {
                 long long const step = static_cast<long long>(value) - last;
@@ -240,6 +252,10 @@ namespace
         std::printf("RESULT grains=%llu advances=%llu repeats=%llu skips=%llu backwards=%llu unreadable=%llu last_counter=%lld\n",
             static_cast<unsigned long long>(grains), static_cast<unsigned long long>(advances), static_cast<unsigned long long>(repeats),
             static_cast<unsigned long long>(skips), static_cast<unsigned long long>(backwards), static_cast<unsigned long long>(unreadable), last);
+        if (out != nullptr)
+        {
+            std::fclose(out);
+        }
         mxlReleaseFlowReader(instance, reader);
         return 0;
     }
@@ -261,6 +277,176 @@ namespace
             out.insert(out.end(), data, data + fragment.size / sizeof(float));
         }
         return out;
+    }
+
+    double dbfs(double rms)
+    {
+        // Sine-referenced: a full-scale sine is 0 dBFS (AES17).
+        return rms > 1e-9 ? 20.0 * std::log10(rms * std::sqrt(2.0)) : -180.0;
+    }
+
+    int audio(mxlInstance instance, std::string const& flow, int seconds, double tone, std::string const& outPath)
+    {
+        auto* reader = openReader(instance, flow);
+        if (reader == nullptr)
+        {
+            std::fprintf(stderr, "no reader for %s\n", flow.c_str());
+            return 1;
+        }
+        constexpr std::size_t kBlock = 480;
+        auto const end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        std::uint64_t const start = headIndex(reader);
+        std::uint64_t next = start;
+        std::vector<float> recorded;
+        std::vector<bool> lost; // per block: the reader fell behind the ring (not the writer's gap)
+        while (std::chrono::steady_clock::now() < end)
+        {
+            auto block = readSamples(reader, next + kBlock, kBlock);
+            if (block.size() != kBlock)
+            {
+                if (headIndex(reader) > next + 4800)
+                {
+                    recorded.insert(recorded.end(), kBlock, 0.F);
+                    lost.push_back(true);
+                    next += kBlock;
+                }
+                continue;
+            }
+            recorded.insert(recorded.end(), block.begin(), block.end());
+            lost.push_back(false);
+            next += kBlock;
+        }
+        mxlReleaseFlowReader(instance, reader);
+        if (!outPath.empty())
+        {
+            if (FILE* f = std::fopen(outPath.c_str(), "wb"))
+            {
+                std::fwrite(recorded.data(), sizeof(float), recorded.size(), f);
+                std::fclose(f);
+            }
+        }
+
+        // 1 ms windows: level, and the stretch where the tone is present.
+        constexpr std::size_t kWindow = 48;
+        std::size_t const windows = recorded.size() / kWindow;
+        std::vector<double> level(windows);
+        for (std::size_t w = 0; w < windows; ++w)
+        {
+            double sum = 0;
+            for (std::size_t i = 0; i < kWindow; ++i)
+            {
+                double const v = recorded[w * kWindow + i];
+                sum += v * v;
+            }
+            level[w] = dbfs(std::sqrt(sum / kWindow));
+        }
+        auto const isLost = [&](std::size_t w) { return lost[w * kWindow / kBlock]; };
+        std::size_t first = windows;
+        std::size_t last = 0;
+        for (std::size_t w = 0; w < windows; ++w)
+        {
+            if (level[w] > -30.0 && !isLost(w))
+            {
+                first = std::min(first, w);
+                last = w;
+            }
+        }
+        std::size_t gaps = 0;
+        std::size_t gapWindows = 0;
+        std::size_t longest = 0;
+        std::size_t lostWindows = 0;
+        double levelSum = 0;
+        std::size_t loud = 0;
+        for (std::size_t w = first; w <= last && w < windows;)
+        {
+            if (isLost(w))
+            {
+                ++lostWindows;
+                ++w;
+                continue;
+            }
+            if (level[w] >= -40.0)
+            {
+                levelSum += level[w];
+                ++loud;
+                ++w;
+                continue;
+            }
+            std::size_t run = 0;
+            while (w + run <= last && level[w + run] < -40.0 && !isLost(w + run))
+            {
+                ++run;
+            }
+            ++gaps;
+            gapWindows += run;
+            longest = std::max(longest, run);
+            auto const sample = start + w * kWindow;
+            std::printf("gap at sample %llu (TAI %.3f s): %zu ms\n", static_cast<unsigned long long>(sample), static_cast<double>(sample) / 48000.0, run);
+            w += run;
+        }
+
+        // 10 ms blocks: the tone's phase against a continuous reference (absolute sample index).
+        // A splice (a skip, a resampler reset) moves the phase; the resampler's slow correction
+        // (≤ 2000 ppm, ≤ 7 degrees per block) moves it smoothly.
+        constexpr double kPi = 3.14159265358979323846;
+        std::vector<double> phase;
+        std::vector<bool> clean;
+        for (std::size_t b = 0; (b + 1) * kBlock <= recorded.size(); ++b)
+        {
+            double i = 0;
+            double q = 0;
+            bool ok = !lost[b];
+            for (std::size_t n = 0; n < kBlock; ++n)
+            {
+                auto const index = start + b * kBlock + n;
+                double const arg = 2 * kPi * tone * static_cast<double>(index % 48000) / 48000.0;
+                i += recorded[b * kBlock + n] * std::cos(arg);
+                q += recorded[b * kBlock + n] * std::sin(arg);
+            }
+            for (std::size_t w = b * kBlock / kWindow; w < (b + 1) * kBlock / kWindow && w < windows; ++w)
+            {
+                ok = ok && level[w] >= -40.0 && w >= first && w <= last;
+            }
+            phase.push_back(std::atan2(q, i) * 180.0 / kPi);
+            clean.push_back(ok);
+        }
+        std::size_t jumps = 0;
+        std::vector<double> recent;
+        for (std::size_t b = 1; b < phase.size(); ++b)
+        {
+            if (!clean[b] || !clean[b - 1])
+            {
+                recent.clear();
+                continue;
+            }
+            double step = phase[b] - phase[b - 1];
+            step -= 360.0 * std::round(step / 360.0);
+            double expected = 0;
+            if (!recent.empty())
+            {
+                auto sorted = recent;
+                std::sort(sorted.begin(), sorted.end());
+                expected = sorted[sorted.size() / 2];
+            }
+            double off = step - expected;
+            off -= 360.0 * std::round(off / 360.0);
+            if (recent.size() >= 5 && std::fabs(off) > 10.0)
+            {
+                ++jumps;
+                auto const sample = start + b * kBlock;
+                std::printf("phase jump at sample %llu (TAI %.3f s): %+.1f deg\n", static_cast<unsigned long long>(sample), static_cast<double>(sample) / 48000.0, off);
+            }
+            recent.push_back(step);
+            if (recent.size() > 20)
+            {
+                recent.erase(recent.begin());
+            }
+        }
+        double const toneMs = first < windows ? static_cast<double>(last - first + 1) : 0.0;
+        std::printf("RESULT seconds=%.1f tone_ms=%.0f level_dbfs=%.1f gaps=%zu gap_ms=%zu longest_gap_ms=%zu phase_jumps=%zu reader_lost_ms=%zu\n",
+            static_cast<double>(recorded.size()) / 48000.0, toneMs, loud > 0 ? levelSum / static_cast<double>(loud) : -180.0, gaps, gapWindows, longest, jumps,
+            lostWindows);
+        return 0;
     }
 
     int avsync(mxlInstance instance, std::string const& videoFlow, std::string const& audioFlow, int width, mxlRational rate, int seconds)
@@ -383,9 +569,9 @@ int main(int argc, char** argv)
     auto const domain = arg(argc, argv, "--domain", "");
     int const width = std::stoi(arg(argc, argv, "--width", "1920"));
     int const seconds = std::stoi(arg(argc, argv, "--seconds", "20"));
-    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample" && mode != "change" && mode != "dump"))
+    if (domain.empty() || (mode != "counter" && mode != "avsync" && mode != "sample" && mode != "change" && mode != "dump" && mode != "audio"))
     {
-        std::fprintf(stderr, "usage: grain_reader counter|avsync|sample|change|dump --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20] [--out FILE]\n");
+        std::fprintf(stderr, "usage: grain_reader counter|audio|avsync|sample|change|dump --domain DIR (--flow UUID | --video UUID --audio UUID --rate 50/1) [--width 1920] [--seconds 20] [--tone 1000] [--out FILE]\n");
         return 2;
     }
     auto* instance = mxlCreateInstance(domain.c_str(), nullptr);
@@ -397,7 +583,11 @@ int main(int argc, char** argv)
     int rc = 0;
     if (mode == "counter")
     {
-        rc = counter(instance, arg(argc, argv, "--flow", ""), width, seconds);
+        rc = counter(instance, arg(argc, argv, "--flow", ""), width, seconds, arg(argc, argv, "--out", ""));
+    }
+    else if (mode == "audio")
+    {
+        rc = audio(instance, arg(argc, argv, "--flow", ""), seconds, std::stod(arg(argc, argv, "--tone", "1000")), arg(argc, argv, "--out", ""));
     }
     else if (mode == "change")
     {

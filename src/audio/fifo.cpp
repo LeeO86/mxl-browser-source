@@ -31,6 +31,20 @@ namespace mbs::audio
         return n;
     }
 
+    std::size_t Fifo::pushSilence(std::size_t frames)
+    {
+        auto const head = _head.load(std::memory_order_relaxed);
+        auto const tail = _tail.load(std::memory_order_acquire);
+        auto const n = std::min(frames, _capacity - (head - tail));
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            float* frame = &_data[((head + i) % _capacity) * _channels];
+            std::fill(frame, frame + _channels, 0.f);
+        }
+        _head.store(head + n, std::memory_order_release);
+        return n;
+    }
+
     std::size_t Fifo::pop(float* out, std::size_t frames)
     {
         auto const tail = _tail.load(std::memory_order_relaxed);

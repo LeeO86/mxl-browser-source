@@ -32,14 +32,16 @@ Everything is on `WEB_PORT` (default 8160). JSON bodies are UTF-8. Errors are `{
  "render":{"mode":"gpu","renderer":"ANGLE (NVIDIA Corporation, NVIDIA A16/PCIe/SSE2, OpenGL ES 3.2)","requested":"gpu","degraded":false,
            "format":"1080p50","width":1920,"height":1080},
  "grains":{"video":180000,"key":180000,"repeated":12,"missed":0,"late_paints":0,"begin_frames":180000},
- "audio":{"channels":2,"stream":true,"drift_ppm":3.1,"buffer_ms":60.2,"peaks_dbfs":[-20.1,-20.1],"underruns":0,"overruns":0},
+ "audio":{"channels":2,"stream":true,"drift_ppm":3.1,"buffer_ms":60.2,"target_ms":60.0,"video_delay_grains":3,"peaks_dbfs":[-20.1,-20.1],"underruns":0,"overruns":0,
+          "gaps":0,"gap_ms":0,"gaps_unfilled":0},
+ "frame_clock":{"mode":"internal","locked":true,"phase_error_ms":0.02,"locks":2},
  "interact":{"sessions":2,"controlled":true},
  "nmos":{"registered":true,"node_id":"…","device_id":"…","domain_id":"…","senders":{"video":{"id":"…","flow_id":"…","enabled":true},
          "key":{"id":"…","flow_id":"…","enabled":true},"audio":{"id":"…","flow_id":"…","enabled":true}}},
  "devtools":{"enabled":false,"sessions":0}}
 ```
 
-`page.state` is `loading`, `loaded`, `error`, `crashed` or `hung`. `not_ready` gives the reason while `ready` is false. `render.mode` is what the page reports (`unknown` before the first load). `grains.repeated` counts repeats for every reason (an unchanged page, a late paint, a page that loads or crashed); `late_paints` counts paints that were never committed because a newer one arrived before the tick. Paint latency and conversion time are histograms in `/metrics`. Senders that do not exist in the current key mode or audio setting are absent.
+`page.state` is `loading`, `loaded`, `error`, `crashed` or `hung`. `not_ready` gives the reason while `ready` is false. `audio.target_ms` is the FIFO target now and `audio.video_delay_grains` the video delay now: with the adaptive target (`BROWSER_AUDIO_BUFFER_MAX_MS`, SPEC §6) both rise after an underrun and fall back slowly (1.3.0). `render.mode` is what the page reports (`unknown` before the first load). `grains.repeated` counts repeats for every reason (an unchanged page, a late paint, a page that loads or crashed); `late_paints` counts paints that were never committed because a newer one arrived before the tick. Paint latency and conversion time are histograms in `/metrics`. Senders that do not exist in the current key mode or audio setting are absent.
 
 ## Source
 
@@ -111,7 +113,11 @@ Our own routes:
 
 `GET /api/v1/console` → `{"messages":[{"time":"2026-10-05T10:00:00Z","level":"error","message":"…","source":"…","line":12}]}` (last 200).
 
-`GET /api/v1/debug/frame-trace` → `{"period_ns":20000000,"events":[[<TAI ns>,"<kind>",a,b],…]}`, the newest 12 288 frame-loop events (about 40 s at 1080p50), oldest first (1.3.0, for diagnosis; `tests/tools/frame_trace.py` splits it into stages). Kinds: `tick` (a: the grain index the tick woke for), `commit` (a: grain index, b: the BeginFrame time of the fresh frame, 0 for a repeat), `bf_posted` (the tick posted a BeginFrame), `bf_sent` (the UI thread sent it; b: its posted time), `paint` (`OnPaint` copied; a: paint number, b: `OnPaint` entry), `convert_start` (a: paint number, b: its BeginFrame), `convert_end` (a: paint number, b: buffer set).
+`GET /api/v1/debug/frame-trace` → `{"period_ns":20000000,"frame_clock":"external","phase_ns":0,"events":[[<TAI ns>,"<kind>",a,b],…]}`, the newest 12 288 frame-loop events (about 40 s at 1080p50), oldest first (1.3.0, for diagnosis, only with `BROWSER_DEVTOOLS=true`, 404 otherwise; `tests/tools/frame_trace.py` splits it into stages). Kinds: `tick` (a: the grain index the tick woke for), `commit` (a: grain index, b: the BeginFrame time of the fresh frame, 0 for a repeat), `bf_posted` (the tick posted a BeginFrame), `bf_sent` (the UI thread sent it; b: its posted time), `paint` (`OnPaint` copied; a: paint number, b: `OnPaint` entry), `convert_start` (a: paint number, b: its BeginFrame), `convert_end` (a: paint number, b: buffer set), `anchor` (internal frame clock, 1.3.0: a: the target time T(k+1) + φ, b: when `SetWindowlessFrameRate` ran, 0 when the UI thread was too late and nothing ran). With the internal frame clock there are no `bf_posted`/`bf_sent` events; a paint's BeginFrame is the newest T(n) + φ before it.
+
+`GET /api/v1/debug/audio-trace` → `{"events":[[<TAI ns>,"<kind>",a,b,c,d,e],…]}`, the newest 16 384 audio events (about 100 s), oldest first (1.3.0, for diagnosis, only with `BROWSER_DEVTOOLS=true`, 404 otherwise; `tests/tools/audio_trace.py` finds Chromium's delivery stalls, `pts` jumps and the underruns they caused). Both traces are lock-free rings: reading them never holds up the tick or CEF's threads. Kinds: `packet` (`OnAudioStreamPacket` arrived; a: its `pts` in ms, wall time (UTC) as CEF 144 gives it, not `CLOCK_MONOTONIC`: in the M7 traces TAI − `pts` is 37 s plus about 20 ms, b: frames, c: FIFO frames after it, d: frames of gap fill put before it, e: arrival in `CLOCK_MONOTONIC` ns) and `tick` (a grain written while a stream plays; a: FIFO frames before it, b: the target in frames, c: underrun frames so far, d: frames dropped as late so far, e: FIFO frames after it).
+
+`POST /api/v1/debug/audio-hold?ms=N` (1–1000) → 202 `{"held_ms":N}`, only with `BROWSER_DEVTOOLS=true` (404 otherwise): the page's audio packets of the next N ms are held and then delivered at once with their own `pts`, as Chromium's late bursts do. It makes an underrun on air; it exists to measure the adaptive target and lip sync (`docs/performance.md`, M7).
 
 ## Preview
 
@@ -121,7 +127,7 @@ Our own routes:
 
 No token (the page asks for it). SPEC §10.6.
 
-`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.2.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.2.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
+`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.3.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.3.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
 
 `GET /widget/interaction[?theme=dark|light|transparent]` and `GET /widget/ograf[?theme=…&layers=1,2]` → the UI page with only the interaction window, or the Graphics tab's preview, layers and form (only the listed layers; no library, upload or delete; `docs/ograf.md` §8), `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
 

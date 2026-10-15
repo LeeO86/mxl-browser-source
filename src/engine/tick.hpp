@@ -51,12 +51,16 @@ namespace mbs::engine
         /// last run that were not handled are committed as repeats first.
         void run(std::uint64_t index, PageState state);
 
+        /// false: no BeginFrame requests (the internal frame clock, BROWSER_FRAME_CLOCK=internal).
+        void sendBeginFrames(bool send) { _sendBeginFrames = send; }
+
         [[nodiscard]] TickCounters const& counters() const { return _counters; }
 
     private:
         TickActions& _actions;
         TickCounters _counters;
         bool _started = false;
+        bool _sendBeginFrames = true;
         std::uint64_t _last = 0;
     };
 }

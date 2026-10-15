@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
 project(mxl-browser-source
-    VERSION 1.2.0
+    VERSION 1.3.0
     DESCRIPTION "MXL media function: a web page rendered offscreen with CEF"
     LANGUAGES CXX C
 )
@@ -35,12 +35,14 @@ target_compile_definitions(mbs-miniz PUBLIC MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
 
 add_library(mbs-core STATIC
     src/audio/fifo.cpp
+    src/audio/gaps.cpp
     src/audio/resampler.cpp
     src/config/config.cpp
     src/config/document.cpp
     src/convert/avx2.cpp
     src/convert/convert.cpp
     src/engine/engine.cpp
+    src/engine/frameclock.cpp
     src/engine/framestore.cpp
     src/engine/tick.cpp
     src/mxlio/setup.cpp
@@ -78,6 +80,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_config.cpp
         tests/unit/test_convert.cpp
         tests/unit/test_engine.cpp
+        tests/unit/test_frameclock.cpp
         tests/unit/test_framestore.cpp
         tests/unit/test_httpserver.cpp
         tests/unit/test_ids.cpp

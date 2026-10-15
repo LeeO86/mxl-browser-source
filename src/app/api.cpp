@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <regex>
 #include <sstream>
@@ -249,8 +250,14 @@ namespace mbs::app
                std::to_string(stats.tick.repeated + stats.tick.repeatedHold) + R"(,"missed":)" + std::to_string(stats.tick.missed) + R"(,"late_paints":)" +
                std::to_string(stats.latePaints) + R"(,"begin_frames":)" + std::to_string(stats.tick.beginFrames) + R"(},"audio":{"channels":)" +
                std::to_string(_cfg.audioChannels) + R"(,"stream":)" + (stream ? "true" : "false") + R"(,"drift_ppm":)" + std::to_string(stats.audio.driftPpm) +
-               R"(,"buffer_ms":)" + std::to_string(stats.audio.fillSeconds * 1000.0) + R"(,"peaks_dbfs":)" + peaks + R"(,"underruns":)" +
-               std::to_string(stats.audio.underruns) + R"(,"overruns":)" + std::to_string(stats.audio.overruns) + R"(},"interact":{"sessions":)" +
+               R"(,"buffer_ms":)" + std::to_string(stats.audio.fillSeconds * 1000.0) + R"(,"target_ms":)" + std::to_string(stats.audio.targetSeconds * 1000.0) +
+               R"(,"video_delay_grains":)" + std::to_string(stats.videoDelayGrains) + R"(,"peaks_dbfs":)" + peaks + R"(,"underruns":)" +
+               std::to_string(stats.audio.underruns) + R"(,"overruns":)" + std::to_string(stats.audio.overruns) + R"(,"gaps":)" +
+               std::to_string(stats.audioGaps) + R"(,"gap_ms":)" + std::to_string(static_cast<double>(stats.audioGapFrames) / 48.0) + R"(,"gaps_unfilled":)" +
+               std::to_string(stats.audioGapsUnfilled) + R"(},"frame_clock":{"mode":)" + (stats.internalFrameClock ? R"("internal")" : R"("external")") +
+               R"(,"locked":)" + (stats.frameClock.locked ? "true" : "false") + R"(,"phase_error_ms":)" +
+               std::to_string(static_cast<double>(stats.frameClock.phaseErrorNs) / 1e6) + R"(,"locks":)" +
+               std::to_string(stats.frameClock.locks[0] + stats.frameClock.locks[1] + stats.frameClock.locks[2]) + R"(},"interact":{"sessions":)" +
                std::to_string(_interact->sessions()) + R"(,"controlled":)" + (_interact->controlled() ? "true" : "false") + R"(},"nmos":)" + nmosJson() +
                R"(,"devtools":{"enabled":)" + (_cfg.devtools ? "true" : "false") + R"(,"sessions":)" + std::to_string(_devtoolsSessions.load()) + "}}";
     }
@@ -273,6 +280,18 @@ namespace mbs::app
         m.setCounter("missed_grains_total", {}, static_cast<double>(s.tick.missed));
         m.setCounter("begin_frames_total", {}, static_cast<double>(s.tick.beginFrames));
         m.setCounter("late_paints_total", {}, static_cast<double>(s.latePaints));
+        m.set("video_delay_grains", {}, static_cast<double>(s.videoDelayGrains));
+        m.clear("frame_clock");
+        m.set("frame_clock", {{"mode", s.internalFrameClock ? "internal" : "external"}}, 1);
+        if (s.internalFrameClock)
+        {
+            m.set("frame_clock_phase_error_seconds", {}, static_cast<double>(s.frameClock.phaseErrorNs) / 1e9);
+            for (std::size_t r = 0; r < engine::kLockReasons.size(); ++r)
+            {
+                m.setCounter("frame_clock_locks_total", {{"reason", engine::kLockReasons[r]}}, static_cast<double>(s.frameClock.locks[r]));
+            }
+            m.setCounter("frame_clock_late_anchors_total", {}, static_cast<double>(s.frameClock.lateAnchors));
+        }
         m.setCounter("paints_dropped_total", {}, static_cast<double>(s.paintsDropped));
         m.setCounter("mxl_write_failures_total", {}, _outputs ? static_cast<double>(_outputs->failures()) : 0.0);
         if (_cfg.audioChannels > 0)
@@ -281,8 +300,17 @@ namespace mbs::app
             m.setCounter("audio_underruns_total", {}, static_cast<double>(s.audio.underruns));
             m.setCounter("audio_overruns_total", {}, static_cast<double>(s.audio.overruns));
             m.setCounter("audio_resets_total", {}, static_cast<double>(s.audio.resets));
+            m.setCounter("audio_underrun_seconds_total", {}, static_cast<double>(s.audio.underrunFrames) / 48000.0);
+            m.setCounter("audio_realigned_seconds_total", {}, static_cast<double>(s.audio.realigned) / 48000.0);
+            m.setCounter("audio_gaps_total", {}, static_cast<double>(s.audioGaps));
+            m.setCounter("audio_gap_seconds_total", {}, static_cast<double>(s.audioGapFrames) / 48000.0);
             m.set("audio_drift_ppm", {}, s.audio.driftPpm);
             m.set("audio_buffer_seconds", {}, s.audio.fillSeconds);
+            m.set("audio_target_seconds", {}, s.audio.targetSeconds);
+            m.setCounter("audio_target_raises_total", {}, static_cast<double>(s.audio.targetRaises));
+            m.setCounter("audio_target_lowered_total", {}, static_cast<double>(s.audio.targetLowered));
+            m.setCounter("audio_fifo_overflows_total", {}, static_cast<double>(s.audioFifoOverflows));
+            m.setCounter("audio_fifo_overflow_seconds_total", {}, static_cast<double>(s.audioFifoOverflowFrames) / 48000.0);
             for (std::size_t c = 0; c < s.audioPeakDbfs.size(); ++c)
             {
                 m.set("audio_peak_dbfs", {{"channel", std::to_string(c + 1)}}, s.audioPeakDbfs[c]);
@@ -652,19 +680,55 @@ namespace mbs::app
             reply(res, 200, statusJson());
             return;
         }
-        if (path == "/api/v1/debug/frame-trace" && method == "GET")
+        // The debug routes are for diagnosis: only with BROWSER_DEVTOOLS=true (404 otherwise).
+        if (path == "/api/v1/debug/frame-trace" && method == "GET" && _cfg.devtools)
         {
             // The frame loop's newest events (docs/api.md): [TAI ns, kind, a, b] each.
-            static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end"};
+            static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end", "anchor"};
             auto const events = _engine->trace();
-            std::string out = R"({"period_ns":)" +
-                              std::to_string(1'000'000'000ULL * _cfg.format.rateDen / _cfg.format.rateNum) + R"(,"events":[)";
+            std::string out = R"({"period_ns":)" + std::to_string(1'000'000'000ULL * _cfg.format.rateDen / _cfg.format.rateNum) +
+                              R"(,"frame_clock":)" + (_internalFrameClock ? R"("internal")" : R"("external")") + R"(,"phase_ns":)" +
+                              std::to_string(_internalFrameClock ? static_cast<std::uint64_t>(_cfg.frameClockPhaseMs) * 1'000'000ULL : 0) + R"(,"events":[)";
             out.reserve(out.size() + events.size() * 48);
             bool first = true;
             for (auto const& e : events)
             {
                 out += (first ? "[" : ",[") + std::to_string(e.ns) + ",\"" + kKinds[static_cast<int>(e.kind)] + "\"," + std::to_string(e.a) + "," +
                        std::to_string(e.b) + "]";
+                first = false;
+            }
+            reply(res, 200, out + "]}");
+            return;
+        }
+        if (path == "/api/v1/debug/audio-hold" && method == "POST" && _cfg.devtools)
+        {
+            // Diagnosis (BROWSER_DEVTOOLS=true only): hold the page's audio packets for ?ms= (1-1000)
+            // and deliver them at once, as Chromium's late bursts do (docs/performance.md, M7).
+            auto const ms = std::atoi(ops::queryValue(req.query, "ms").c_str());
+            if (ms < 1 || ms > 1000)
+            {
+                error(res, 400, "ms must be 1-1000");
+                return;
+            }
+            _engine->holdAudio(static_cast<std::uint32_t>(ms));
+            reply(res, 202, R"({"held_ms":)" + std::to_string(ms) + "}");
+            return;
+        }
+        if (path == "/api/v1/debug/audio-trace" && method == "GET" && _cfg.devtools)
+        {
+            // The audio path's newest events (docs/api.md): [TAI ns, kind, a, b, c, d, e] each.
+            auto const events = _engine->audioTrace();
+            std::string out = R"({"events":[)";
+            out.reserve(out.size() + events.size() * 64);
+            bool first = true;
+            for (auto const& e : events)
+            {
+                if (e.ns == 0)
+                {
+                    continue;
+                }
+                out += (first ? "[" : ",[") + std::to_string(e.ns) + (e.kind == engine::AudioTraceKind::Packet ? ",\"packet\"," : ",\"tick\",") +
+                       std::to_string(e.a) + "," + std::to_string(e.b) + "," + std::to_string(e.c) + "," + std::to_string(e.d) + "," + std::to_string(e.e) + "]";
                 first = false;
             }
             reply(res, 200, out + "]}");

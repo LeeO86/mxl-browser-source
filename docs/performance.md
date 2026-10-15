@@ -1,6 +1,154 @@
 # Performance
 
-Lab measurements of mxl-browser-source. The 1.0.0 numbers (one page, `counter.html`, latency) are in the README; this file starts with 1.3.0: the frame loop (M5) and the OGraf soaks.
+Lab measurements of mxl-browser-source. The 1.0.0 numbers (one page, `counter.html`, latency) are in the README; this file starts with 1.3.0: the audio stalls (M7), the frame clock and audio (M6), the frame loop (M5) and the OGraf soaks.
+
+## Audio stalls, 2026-10-15 (M7)
+
+M6 left YouTube with 12–13 underruns per 2 minutes (1.5–1.9 s of silence) against 1 before the hardening. This section finds why and fixes it.
+
+**Setup.** As M6 (NVIDIA A16 GPU 0, `--cpuset-cpus 2,4,…,16`, now also `--cpuset-mems 0`, the GPU's NUMA node; `--ulimit rtprio=99`, 1080p50 `v210a`, GPU rendering, internal frame clock). YouTube is "Dimitri Vegas - Live at Tomorrowland 2026 Mainstage" (`3o0T4z6oT4Y`, 1080p25 AV1 + Opus) through `templates/youtube.html`, 150 s from 0:15 (so 1:50–2:25 is inside) or 120 s from 0:30 as in M6. Images: `m7trace1` (M6 + the audio trace), `m7fix2` (+ adaptive target), `m7fix3` (+ the histogram file on `/dev/shm`, the head of this series). `BROWSER_AUDIO_BUFFER_MAX_MS=60` gives M6's fixed 60 ms target on the later images. Lab run directory: `~/mxl-lab/ograf/m7/`.
+
+**Method.**
+- `GET /api/v1/debug/audio-trace`: the arrival (TAI and `CLOCK_MONOTONIC`), `pts`, frames and FIFO level of every `OnAudioStreamPacket`, and the FIFO, target, underrun and late-drop totals of every grain. `cadence_bench.py` polls it every 15 s with the media position (`video.currentTime`, every 2 s) and the busy time of the container's CPUs minus the container's own (other load); `tests/tools/audio_trace.py` finds the stalls (a pause between packets), `pts` jumps and the underrun each caused.
+- `tests/tools/audio_threads.py`: every 5 ms from the host's `/proc`, the state, kernel wait channel and scheduler times of Chromium's audio threads: the browser process's capture thread `AudioInputDevice` (it calls `OnAudioStreamPacket`), the audio service's `AudioWorkerThread` and `Loopback Worker`, the renderer's `AudioOutputDevice` and `Media`.
+- `POST /api/v1/debug/audio-hold?ms=`: holds the page's packets and delivers them at once, as Chromium's stalls do; `~/mxl-lab/ograf/m7/inject.sh` replays the stall pattern of a bad run (223, 340, 260, 100, 140, 223, 150 ms at 5, 25, 42, 44, 53, 82, 110 s), so settings can be compared on the same stalls.
+- Lip sync: `templates/avsync.html` and `grain_reader avsync` (20 flashes and tone bursts per measurement).
+
+**What Chromium does** (40 YouTube runs, 92 minutes):
+- Every underrun follows a pause in delivery of 80–480 ms. After it the held packets arrive at once, 10 at a time (the capture's shared-memory ring) with their original, continuous `pts`: **0 `pts` jumps and 0 ms of gap fill** in every run. The audio is late, not lost, and the `pts` gap fill plays no part.
+- No starvation: the player's buffer held 54–59 s; Chromium dropped no video frames; the packets' delay after their capture time is 20.2–21.1 ms (p50) and returns to it after each burst.
+- Not tied to the video: the natural stalls fall anywhere between 0:18 and 2:46 of it, not only at 1:50–2:25. They come in periods: the same image and settings gave 9 and 4 underruns at 16:06, 0–2 from 16:12 to 16:52, 7, 4, 10 and 10 again from 17:31 to 18:18 (local time).
+- Not the CPU: `--cpuset-mems 0` against none, alternated (4 + 4 runs), changed nothing (0, 0, 2, 0 underruns against 0, 0, 0, 1). Other load on CPUs 2–16 during the runs: median 0.1–0.2 cores, at most 0.5. Eight busy loops pinned to CPUs 2–16 (7 cores of other load) gave **0 stalls** in 2 runs, with up to 8 late paints. Prometheus shows the same load on CPUs 2–16 in the bad M6 runs as in good ones.
+- **The capture thread waits for the disk journal.** In 19 of the 20 sampled stalls of 80 ms or more (the other, 81 ms, waited for a CPU), `AudioInputDevice` is in state D in ext4's journal (`do_get_write_access`, `__lock_buffer`) for the whole pause, while the audio service's `Loopback Worker` and the renderer's audio thread run on time (0 "GenerateMoreAudio Is Behind"). Its only writable shared file mapping is Chromium's persistent histogram file (`/tmp/mxl-browser-source-cache/BrowserMetrics/*.pma`, in the container's overlay on the host's root ext4). A histogram write to a page that writeback has cleaned waits for the journal commit, which takes 100–480 ms while other processes write to the disk; that is when the periods come.
+- `--disable-features=PersistentHistograms` and `--enable-features=PersistentHistograms:storage/LocalMemory` leave the mapping in place in CEF 144 (10 underruns with the flag against 10 without, in the same period). With `/tmp` on a tmpfs: **0 underruns** in that period, between runs with 10 and 10.
+- The bad periods also cost video: 4–24 late paints per run against 0–1 in good periods, 0 with `/tmp` on a tmpfs.
+
+**Fix 1: the histogram file on `/dev/shm`.** At start `<cache>/BrowserMetrics` becomes a link to `/dev/shm/mxl-browser-source-metrics` (a few MB), unless the cache already is on a tmpfs; Chromium's disk caches stay in the cache. Checked: the mapping is `/dev/shm/mxl-browser-source-metrics/BrowserMetrics-….pma` (`browser_metrics_on_tmpfs`). The evening after the fix was a quiet period, so the A/B is small: the image before the fix (`m7fix2`) and with it (`m7fix3`), both at a fixed 60 ms target, played the same YouTube at the same time (`pair.sh`, 5 rounds), or one after the other, with a container writing 32 MB with `fsync` every 1.5 s (2 rounds) or 512 MB buffered every 6 s (2 rounds, both at once) to the host's disk: before the fix 3 underruns (0.51 s) in 9 runs (the two longer than 100 ms with the capture thread in the journal); with it 0 in 9 runs. `/tmp` on a tmpfs, which takes the same file off the disk, gave 0 against 10 and 10 in a bad period (above).
+
+**Fix 2: adaptive target** (`BROWSER_AUDIO_BUFFER_MAX_MS`, default 300) for any late burst that remains. Each frame of silence an underrun plays raises the target by one frame, up to the maximum, so the late audio is kept (M6 dropped it down to 60 ms) and the next stall of that size is absorbed. After 10 s without an underrun the target falls back at 1 ms/s; the controller gets that as feed-forward (1000 ppm, inaudible) and may use ±2000 ppm while raised. The video delay follows in whole grains, one grain per tick.
+- Why this design. Replaying the packet arrivals of the bad runs through models of the FIFO (and checked against the real runs: model 2 underruns, 303 ms; measured 2, 296 and 204 ms):
+
+| Policy (3 bad runs, 7 min) | Underruns | Silence | Mean target |
+| --- | --- | --- | --- |
+| Fixed 60 ms (M6) | 23 | 3.2 s | 60 ms |
+| Fixed 250 ms | 9 | 1.0 s | 250 ms |
+| Adaptive to 200 ms | 12 | 1.4 s | 180 ms |
+| **Adaptive to 300 ms, 1 ms/s after 10 s** | **6** | **0.9 s** | **244 ms in bad periods, 60 ms otherwise** |
+| Adaptive to 300 ms, 2 ms/s | 8 | 0.9 s | 207 ms |
+| Adaptive to 400 ms | 6 | 0.9 s | 296 ms |
+
+  A larger fixed target pays its latency all the time and still has the first stall of each burst; the adaptive one pays only after a stall. Replacing filled silence by late audio with matching `pts` would not help: nothing was filled. A short re-prime after a burst is what M6 replaced; it makes each stall a hole of at least the target. Growing faster than the silence played (a margin of 20 ms) or decaying faster saved no silence. 300 ms covers the stalls seen except the 340–480 ms ones.
+- Replayed stall pattern (2 runs × 150 s each): fixed 60 ms **7 and 7 underruns, 1.12 and 1.09 s**; adaptive **2 and 2, 0.31 and 0.21 s** (only the first stall and the 340 ms one beyond the raised target). Target mean 240 and 242 ms, maximum 300 ms; the video delay rose from 3 to 15 grains with it, and the target was back at 60 ms about 250 s after the last stall.
+- **Lip sync** (`avsync.html`, A/V offset, positive: audio late): fixed 60 ms 21–28 ms; adaptive: 24.5 ms at 60 ms, 14.6 ms at 201 ms (delay 10 grains), 20.0 ms at 300 ms (15), 24.9 ms while falling at 228 ms (11), 26.5 ms at 88 ms (4). Within ±10 ms of the base, inside one frame; without the feed-forward the fill lagged the falling target and the offset grew to 46 ms.
+- Cost: the delay ring and the pool hold the extra grains: at 1080p50 `v210a` 12 sets of 8.3 MB (about 100 MB); 1080p25 6 sets. While the target is raised the video is that much later; when it falls, one frame is skipped every 20 s at 1080p50 (40 s at 25p).
+
+**Results, image `m7fix3`, internal clock** (2026-10-15, 18:43–19:10):
+
+| Run | Underruns (silence) | Gaps on the output (longest) | Target / video delay | Late paints, held |
+| --- | --- | --- | --- | --- |
+| YouTube 1 (150 s from 0:15) | **0** | 35 gaps, 37 ms (2 ms: quiet moments of the music) | 60 ms / 3 | 0, 49.99 % (ideal 50) |
+| YouTube 2 | **0** | 32 gaps, 35 ms (2 ms) | 60 ms / 3 | 0, 50.00 % |
+| YouTube, replayed bad period, 2 runs | 2 and 2 (0.31, 0.21 s) | 329 and 238 ms | mean 240 ms, max 300 / up to 15 | 0, 50.00 % |
+| 50p clip | 0 | 0 | 60–156 ms (falling after the replay) | 0, 0 |
+| 25p clip | 0 | 0 | 60 ms / 3 | 0, 50.00 % |
+| Tone | 0 | 0, 0 phase jumps | 60 ms / 3 | – |
+| Tone 5 s on / 3 s off | 0 | the 15 off periods, 3 000–3 060 ms | 60 ms / 3 | – |
+
+For comparison, the same session's fixed-60 ms runs in a bad period (17:31–17:47): YouTube 7 underruns (0.93 s) and 4 (0.31 s), the tone 9 (1.16 s); with the adaptive target in the quieter period after it (17:48–18:05): YouTube 0 and 0, 50p 0, 25p 1 (0.21 s), tone 0. M6 measured YouTube at 12–13 underruns and the clips and tone at 0–3 gaps.
+
+Raw data (lab host) in `~/mxl-lab/ograf/m7/`: `trace/`, `repro/`, `ab/` (NUMA pin A/B), `threads/`, `load/` (busy loops), `exp/` (flags, tmpfs), `disk/`, `final/` (fixed against adaptive, replayed pattern and avsync), `final3/` (the table above), `pair/` and `pairload/` (the A/B of fix 1); each with `runs.jsonl`, `bench.log` and `raw/` (audio traces, thread samples); the scripts `run.sh`, `after.sh`, `exp.sh`, `disk.sh`, `pair.sh`, `pairload.sh`, `inject.sh`, `lab.sh` (the M6 lab script with `--cpuset-mems 0`).
+
+## Frame clock and audio, 2026-10-15 (M6)
+
+**Setup.** Same host as M5 (NVIDIA A16 GPU 0, `--cpuset-cpus 2,4,…,16`, `--ulimit rtprio=99`, frame pipeline on), 1080p50 `v210a`, GPU rendering. Image `1bb08f6`, from before the default changed, so every run sets `BROWSER_FRAME_CLOCK` explicitly. "Before hardening" is image `2f7c726` (M5 head). Lab run directory: `~/mxl-lab/ograf/m6/matrix-1bb08f6/`.
+
+**Method.**
+- `tests/integration/cadence_bench.py` measures 120 s after 15 s of warm-up (30 s for YouTube).
+- The clips come from `tests/media/make_clips.sh` (150 s, VP9 1080p with the frame number as bar code, Opus with a 1 kHz tone at −12 dBFS) and play through `templates/video.html`.
+- Per grain, `grain_reader counter` reads which clip frame reached MXL. That gives content repeats and skips against an ideal sampler of the clip's rate on 50 Hz, counted on fresh grains (Chromium's choice of video frame) and on held grains (a missing paint).
+- `getVideoPlaybackQuality()` through DevTools gives the frames Chromium itself dropped.
+- `grain_reader audio` finds gaps below −40 dBFS (1 ms windows) and tone phase jumps on the MXL output. The function's counters give underruns.
+- A Chromium trace (audio, media, gpu.capture) counts "GenerateMoreAudio Is Behind".
+- CPU per process type comes from `/proc` in the container.
+- `tests/integration/frameloop_bench.py` covers the animated pages and OGraf layers (150 s).
+
+**Video cadence** (25p and 50p: 3 runs each, mean; others 1 run). "Held" is the share of grains without a new frame; content at 25 fps is ideally 50 % held, 29.97 fps 40.06 %, 50 and 59.94 fps 0 %.
+
+| Content | Clock | Held | Content repeats / skips on fresh grains | Repeats on held grains (per run) | Dropped by Chromium | rAF phase after T(k): centre / spread |
+| --- | --- | --- | --- | --- | --- | --- |
+| 25p clip | external | 50.75 % | 2.48 % / 1.23 % | 337 | 134 of 9 410 (1.4 %) | 4.1 / 3.2 ms |
+| 25p clip | **internal** | **50.00 %** | **0.02 % / 0** | **0** | **0 of 9 408** | **0.0 / 0.1 ms** |
+| 50p clip | external | 13.4 % | 15.1 % / 1.1 % | 18 | 2 517 of 18 818 (13.4 %) | 3.7 / 1.6 ms |
+| 50p clip | **internal** | **0** | **0 / 0** | **0** | **0 of 18 814** | **0.0 / 0.1 ms** |
+| 29.97p clip | external | 42.5 % | 1.6 % / 0.6 % | 148 | 150 of 3 759 (4.0 %) | 3.7 / 3.1 ms |
+| 29.97p clip | **internal** | **40.07 %** | 0.44 % / 0 | 16 | **0 of 3 759** | 0.0 / 0.1 ms |
+| 59.94p clip | external | 0 | 0 / 9.9 % (steps of 3 instead of 2) | 0 | 1 246 of 7 518 (16.6 %, the rate difference) | 3.4 / 1.2 ms |
+| 59.94p clip | **internal** | 0.02 % | 0.02 % / 0.02 % | 0 | 1 247 of 7 517 (16.6 %, the rate difference) | 0.0 / 0.1 ms |
+| YouTube 1080p25 (below) | external | 54.2 % | – (no bar code) | – | 128 and 376 of 3 138 | 3.7 / 1.3 ms |
+| YouTube 1080p25 | **internal** | **50.03 %** | – | – | **0 and 0 of 3 137** | 0.0 / 0.1 ms |
+
+- **External BeginFrames.** CEF 144 gives each BeginFrame the call time as frame time, a null deadline and a 60 Hz interval (CEF #4311). A `<video>` therefore picks the wrong frame often: Chromium drops 13 % of a 50p clip, and 15 % of fresh grains repeat content. The 25p clip shows about 340 repeats per 2 minutes on held grains (paints that never came).
+- **Internal clock.** No content error in 18 814 grains of 50p, exact 2:1 for 25p, and the right 59.94 → 50 pattern. The function's phase error stays ≤ 0.0002 ms in every run, with 0 late anchors and 0 drift re-anchors. (That phase error is modelled from the anchor and the TAI − monotonic offset, not measured; the rAF timestamps below are the measurement.) The rAF timestamps sit within ±0.07 ms of T(k) + φ (spread 0.1 ms, against 1.2–5.7 ms of dispatch jitter for external BeginFrames).
+- **Unanswered BeginFrames** (external only; with the internal clock the function sends none): 50p 24 % (the pipeline turns them into 13.4 % held), 59.94p 9.6 %.
+- **`nvidia-smi` polled every second:**
+  - external 50p: held 12.2 % (unchanged), but unanswered BeginFrames rise from 24 % to 45 %;
+  - internal 50p: held 0 and 0 dropped, unchanged.
+- **`--run-all-compositor-stages-before-draw`:**
+  - external 25p: becomes clean (0.1 % repeats, 2 dropped);
+  - external 50p: breaks (46 % held, 70 % content repeats, 2 909 of 6 273 dropped);
+  - internal: identical to without the flag (0 / 0 / 0).
+  - Not adopted.
+- **`BROWSER_FRAME_CLOCK_PHASE_MS=10`:** the rAF centre moves to 10.03 ms and 50p stays clean (1 held grain in 12 030, 0 dropped). No gain over φ = 0, so the default stays 0.
+- **CPU, cores, function / GPU process / renderer / audio service:**
+  - 50p: external 0.49 / 0.19 / 0.70 / 0.016 = 1.40; internal 0.55 / 0.23 / 0.86 / 0.016 = 1.65. The extra 0.25 cores come from Chromium decoding and presenting the 13 % of frames it used to drop.
+  - 25p: 0.98 → 1.11 cores. YouTube: 1.00 → 1.11 cores.
+- Late paints: 0 with external; with internal 0–3 per run (59.94p 1, trace run 3, YouTube 1–3).
+
+**OGraf and animated pages under the internal clock** (`frameloop_bench.py`, every element changes every frame, 150 s = 7 607 grains, held in %, 0 missed grains in every run; the bench's `paints` field counts only paints paired with a BeginFrame, so the paint count here is `paint_copy_seconds`, one per grain):
+
+| Elements / layers | 2 | 4 | 8 | CPU (8) |
+| --- | --- | --- | --- | --- |
+| Page, internal | 0.07 | 0 | 0 | 1.04 cores |
+| Page, external (same image) | 0.04 | 0 | 0.12 | 0.98 |
+| OGraf layers, internal | 0.24 | 0 | 0.01 | 1.06 |
+| EBU examples, internal | 0 | 0 | 0.13 | 1.56 |
+| M5 pipeline, external (m5d, for comparison) | page 0.10 / 0 / 0.07, OGraf 0 / 0 / 0, EBU 0 / 0.07 / 0 | | | 1.04 / 1.44 |
+
+For animations, both clocks give what M5 reached with the pipeline (≤ 0.24 %). The internal clock does not cost frames on OGraf, and CPU is the same.
+
+**YouTube** (Adrian's case: "Dimitri Vegas - Live at Tomorrowland 2026 Mainstage", `3o0T4z6oT4Y`; the player chose 1920×1080 at 25 fps, AV1 + Opus):
+- Opening `youtube.com/embed/<id>` as the page fails: YouTube answers `embedder.identity.missing.referrer` (player error 153) when no Referer identifies the embedder. `templates/youtube.html` embeds the player in an iframe, and the bench reads its stats from the iframe's DevTools target (`--target youtube.com/embed`).
+- Internal: held 50.05 % and 50.01 % (ideal 50 %), Chromium dropped 0 of 3 137 in both runs, stats for nerds "0 dropped".
+- External: held 52.2 % and 56.2 %, dropped 128 and 376 of 3 138 (4 % and 12 %).
+- The old image (`2f7c726`, external): held 50.2 %, 4 dropped.
+- CPU 1.0–1.1 cores.
+
+**Audio** (gaps on the MXL output / function underruns; tone runs 120 s, 1 kHz, −12 dBFS):
+
+| Run | Before (`2f7c726`) | After, external | After, internal | Internal, `BROWSER_AUDIO_BUFFER_MS=250` |
+| --- | --- | --- | --- | --- |
+| Tone | 1 gap, 347 ms | 4 gaps, 186 ms | 3 gaps, 75 ms | 5 gaps, 364 ms |
+| Tone 5 s on / 3 s off (15 off periods, 3 000 ms each) | 2 995–3 071 ms | 2 992–3 061 ms (mean 3 027) | 3 005–3 061 ms, 0 underruns | – |
+| 50p clip (per run) | 9 gaps, 1 046 ms | 0–3 gaps, 0–265 ms (3 runs: 4, 399 ms) | **0** (3 runs) | 1–2 gaps, 4–107 ms (3 runs: 5, 178 ms) |
+| 25p clip, 3 runs | – | 7 gaps, 1 270 ms | **0** | – |
+| 50p with `nvidia-smi` / with tracing | – | 3, 415 ms / 0 | 3, 267 ms / 3, 257 ms | – |
+| YouTube (per run) | 1 underrun (375 ms) | 10 underruns, 1.30 s; 10, 1.81 s | **13, 1.53 s; 12, 1.91 s** | 1, 0.03 s; 4, 0.40 s |
+| "GenerateMoreAudio Is Behind" (30 s traces) | – | 0 (50p), 0 (YouTube) | 0 (50p), 0 (YouTube) | 0 (YouTube) |
+
+- **What the hardening does.** Every gap on the output is an underrun the function counts (`audio_underrun_seconds_total` = `audio_realigned_seconds_total` = the measured gap). Gaps are exactly as long as the audio that came late, with no re-priming. The function's own gap and overrun counters stay 0. Stream start and stop cost at most the page's timer jitter (off periods 2 992–3 061 ms against 3 000 nominal). On clips the result is clearly better than before: 50p went from 9 gaps (1 s) to 0 with the internal clock.
+- **Where the gaps come from.** Chromium delivers audio late, by up to 380 ms at a time, while its renderer is not behind (0 "Behind" events in every trace). The gaps come in clusters within 1–3 s and do not follow the bench's 20 s polls. The host's other containers are not pinned and share CPUs 2–16, and Chromium's audio path does not run at real-time priority (the tick and the converter do).
+- **YouTube is worse than before.** 12–13 underruns per 2 minutes (1.5–1.9 s of silence), against 1 on `2f7c726`. They cluster at the same position of the video (about 1:50–2:25) in every run with both clocks, so they follow the stream, not the frame clock. The old resampler re-primed after an underrun and let the latency grow, which absorbed a burst of late packets. The new one holds the 60 ms target and turns every stall longer than that into a gap.
+- **A 250 ms FIFO does not remove the gaps.** YouTube drops to 1–4 underruns (0.03–0.40 s), but the tone and the clips are no better (tone 5 gaps, 364 ms; 50p 5 gaps in 3 runs). It costs 190 ms of latency: `BROWSER_VIDEO_DELAY_GRAINS=auto` delays the video from 3 to 13 grains to stay in sync. In those runs the 50p clip also had 27–40 late paints (0.45–0.68 % held) instead of 0. The default stays 60 ms.
+- **Open.** The cause of the YouTube bursts needs the packet arrival times from `OnAudioStreamPacket` around 1:50–2:25 of that video. Then decide between a short re-prime after a burst and a larger target for streamed media. (M7, above: the capture thread waited for the disk journal; fixed, with an adaptive target as a safety net.)
+
+**Decision (2026-10-15, Adrian).** `BROWSER_FRAME_CLOCK=internal` is the default from 1.3.0, as in OBS and CasparCG. `external` stays an option, and 1080p59.94 and 29.97 fall back to it (`frame_clock_fallback`).
+
+Raw data (lab host): `~/mxl-lab/ograf/m6/matrix-1bb08f6/`:
+- `runs.jsonl`, one line per cadence run; `summary.md` is the table of `~/mxl-lab/ograf/m6/summary.py`;
+- `frameloop.jsonl`;
+- `raw/`: counter, audio and frame traces per run;
+- `bench.log`;
+- `runs-invalid-yt-referrer.jsonl`: the YouTube runs before `youtube.html`.
 
 ## Frame loop, 2026-10-14 (M5: held frames, missed grains)
 
@@ -97,7 +245,7 @@ Raw data: `~/mxl-lab/ograf/m5/mem-old/`, `mem-new/` (`memory.log`, `soak.csv`).
 | Repeated grains | 198 148 (13.7 %): 194 197 BeginFrames without a paint, plus the late paints, plus 28 `hold` at the start |
 | Frame ready (BeginFrame → converted) | mean 13.5 ms |
 | "stack smashing detected" | **1**, at 18:37 (minute 3), 3 s after `renderer-test` was loaded the first time: Dawn's Vulkan probe ("vkCreateInstance: Found no drivers") in a short-lived helper. No grain was missed and no process that matters was lost. There were none in the 7 h 57 min after it, although `renderer-test` was loaded about 3 500 more times. `BROWSER_WEBGPU=false` does not stop this one probe (see the M5 notes above). It is harmless here and noted as a known log line. |
-| Other log lines | `dbus` and `vkCreateInstance() failed: -9` at start (known); an SSL handshake error every 10 min (a page's request to an outside host through the lab's TLS inspection, `net_error -202`) |
+| Other log lines | `dbus` and `vkCreateInstance() failed: -9` at start (known); an SSL handshake error every 10 min (`net_error -202` through the lab's TLS inspection): Chromium's own background connections, not a page or graphic, as in the 2.5 h run below; `navigation_blocked_total{reason="ograf_local"}` counts every request a page or graphic makes outside the library |
 
 **Over time** (mean per hour of the per-minute samples; "distinct" is the number of different graphics on the 8 layers, sampled every second from the `ograf_load` log lines):
 

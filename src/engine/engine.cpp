@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <functional>
 #include <cmath>
 #include <utility>
@@ -72,10 +73,12 @@ namespace mbs::engine
     {
         // Every buffer is allocated here; nothing is allocated per frame (SPEC §18 rule 14).
         _settings.pipelineGrains = std::min<std::uint32_t>(_settings.pipelineGrains, 1);
-        _pool.resize(_settings.videoDelayGrains + _settings.pipelineGrains + 3);
+        _settings.videoDelayMaxGrains = std::max(_settings.videoDelayMaxGrains, _settings.videoDelayGrains);
+        _videoDelay = _videoDelayWanted = _settings.videoDelayGrains;
+        _videoDelayNow.store(_videoDelay);
+        _pool.resize(_settings.videoDelayMaxGrains + _settings.pipelineGrains + 3);
         _pending.reserve(_settings.pipelineGrains + 2);
         _poolBeginFrame.assign(_pool.size(), 0);
-        _trace.resize(kTraceEvents);
         _store.setClock([this] { return _clock.nowNs(); });
         for (auto& set : _pool)
         {
@@ -90,14 +93,19 @@ namespace mbs::engine
             bgra[i] = 255;
         }
         convertInto(_black, _settings, bgra.data());
-        _ring.assign(_settings.videoDelayGrains + 1, kTransparent);
+        _ring.assign(_settings.videoDelayMaxGrains + 1, kTransparent);
 
         if (_settings.audioChannels > 0)
         {
-            _fifo = std::make_unique<audio::Fifo>(_settings.audioChannels, 48000);
-            _resampler = std::make_unique<audio::Resampler>(_settings.audioChannels, _settings.audioTargetFrames);
+            _fifo = std::make_unique<audio::Fifo>(_settings.audioChannels, audioFifoFrames(_settings));
+            _resampler = std::make_unique<audio::Resampler>(_settings.audioChannels, _settings.audioTargetFrames, _settings.audioMaxTargetFrames);
             _audioBuffer.assign(static_cast<std::size_t>(4800) * _settings.audioChannels, 0.f);
             _stats.audioPeakDbfs.assign(_settings.audioChannels, -120.0);
+        }
+
+        if (_settings.internalFrameClock)
+        {
+            _frameClock = std::make_unique<FrameClock>(_settings.framePeriodNs, _settings.framePhaseNs, _settings.frameLockThresholdNs);
         }
 
         if (_settings.previewWidth > 0)
@@ -117,6 +125,48 @@ namespace mbs::engine
     void Engine::setRequestFrame(std::function<void()> request)
     {
         _requestFrame = std::move(request);
+    }
+
+    void Engine::setAnchorFrameClock(std::function<void(std::uint64_t)> anchor)
+    {
+        _anchorFrameClock = std::move(anchor);
+    }
+
+    void Engine::frameClockAnchored(std::uint64_t targetNs, std::uint64_t calledNs)
+    {
+        if (!_frameClock)
+        {
+            return;
+        }
+        _frameClock->anchored(targetNs, calledNs, _clock.monotonicOffsetNs());
+        record(TraceKind::Anchor, calledNs != 0 ? calledNs : _clock.nowNs(), targetNs, calledNs);
+    }
+
+    void Engine::frameClockSkipped()
+    {
+        if (_frameClock)
+        {
+            _frameClock->skipped();
+        }
+    }
+
+    void Engine::relockFrameClock(LockReason reason)
+    {
+        if (_frameClock)
+        {
+            _frameClock->relock(reason);
+        }
+    }
+
+    std::uint64_t Engine::internalBeginFrameNs(std::uint64_t nowNs) const
+    {
+        // The newest of Chromium's BeginFrames at or before `nowNs`: T(n) + φ.
+        auto const phase = _settings.framePhaseNs;
+        if (nowNs < phase)
+        {
+            return 0;
+        }
+        return _clock.indexNs(_clock.indexAt(nowNs - phase)) + phase;
     }
 
     void Engine::start()
@@ -151,7 +201,9 @@ namespace mbs::engine
     void Engine::paint(std::uint8_t const* bgra, std::size_t stride, std::uint32_t width, std::uint32_t height)
     {
         auto const now = _clock.nowNs();
-        auto const sent = _dispatchedNs.load();
+        // External: the newest BeginFrame dispatched before the paint. Internal: the newest of
+        // Chromium's own BeginFrames, which the frame clock keeps at T(n) + φ.
+        auto const sent = _frameClock ? internalBeginFrameNs(now) : _dispatchedNs.load();
         if (!_store.paint(bgra, stride, width, height, FrameStore::Stamp{sent, now, 0}))
         {
             std::lock_guard lock{_statsMutex};
@@ -196,25 +248,40 @@ namespace mbs::engine
 
     void Engine::record(TraceKind kind, std::uint64_t ns, std::uint64_t a, std::uint64_t b)
     {
-        std::lock_guard lock{_traceMutex};
-        _trace[_traceNext] = TraceEvent{ns, kind, a, b};
-        if (++_traceNext == _trace.size())
-        {
-            _traceNext = 0;
-            _traceFull = true;
-        }
+        _trace.record(TraceEvent{ns, kind, a, b});
+    }
+
+    void Engine::recordAudio(AudioTraceEvent const& event)
+    {
+        _audioTrace.record(event);
+    }
+
+    std::vector<AudioTraceEvent> Engine::audioTrace() const
+    {
+        return _audioTrace.snapshot();
     }
 
     std::vector<TraceEvent> Engine::trace() const
     {
-        std::lock_guard lock{_traceMutex};
-        std::vector<TraceEvent> out;
-        if (_traceFull)
+        return _trace.snapshot();
+    }
+
+    std::uint32_t videoDelayExtraGrains(double extraFrames, double grainFrames)
+    {
+        if (extraFrames <= 0 || grainFrames <= 0)
         {
-            out.assign(_trace.begin() + static_cast<std::ptrdiff_t>(_traceNext), _trace.end());
+            return 0;
         }
-        out.insert(out.end(), _trace.begin(), _trace.begin() + static_cast<std::ptrdiff_t>(_traceNext));
-        return out;
+        return static_cast<std::uint32_t>(std::lround(extraFrames / grainFrames));
+    }
+
+    std::size_t audioFifoFrames(EngineSettings const& settings)
+    {
+        // The largest target (the adaptive maximum plus the largest BROWSER_AV_OFFSET_MS) times
+        // the overrun factor, where the resampler cuts back, plus 100 ms for the packet that
+        // finds it there; never below the 1 s of earlier versions.
+        auto const target = static_cast<double>(std::max(settings.audioTargetFrames, settings.audioMaxTargetFrames) + kMaxAvOffsetFrames);
+        return std::max<std::size_t>(48000, static_cast<std::size_t>(std::ceil(audio::Resampler::kOverrunFactor * target)) + 4800);
     }
 
     void Engine::setPageState(PageState state)
@@ -222,17 +289,105 @@ namespace mbs::engine
         _pageState.store(state);
     }
 
-    void Engine::pushAudio(float const* const* planes, int planeCount, std::size_t frames)
+    void Engine::holdAudio(std::uint32_t ms)
     {
-        if (_fifo)
-        {
-            // Page channels beyond the flow's count are dropped, missing ones are silent.
-            _fifo->push(planes, planeCount, frames, _clock.nowNs());
-        }
+        _holdUntilNs.store(_clock.nowNs() + static_cast<std::uint64_t>(ms) * 1'000'000ULL);
     }
 
-    void Engine::setAudioActive(bool active)
+    void Engine::pushAudio(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs)
     {
+        if (!_fifo)
+        {
+            return;
+        }
+        if (auto const until = _holdUntilNs.load(std::memory_order_relaxed); until != 0)
+        {
+            if (_clock.nowNs() < until)
+            {
+                HeldPacket held{std::vector<float>(static_cast<std::size_t>(planeCount) * frames, 0.f), planeCount, frames, ptsMs};
+                for (int c = 0; c < planeCount; ++c)
+                {
+                    if (planes[c] != nullptr)
+                    {
+                        std::copy(planes[c], planes[c] + frames, held.samples.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(c) * frames));
+                    }
+                }
+                _held.push_back(std::move(held));
+                return;
+            }
+            _holdUntilNs.store(0, std::memory_order_relaxed);
+            for (auto const& held : _held)
+            {
+                std::vector<float const*> heldPlanes;
+                for (int c = 0; c < held.planeCount; ++c)
+                {
+                    heldPlanes.push_back(held.samples.data() + static_cast<std::size_t>(c) * held.frames);
+                }
+                pushPacket(heldPlanes.data(), held.planeCount, held.frames, held.ptsMs);
+            }
+            _held.clear();
+        }
+        pushPacket(planes, planeCount, frames, ptsMs);
+    }
+
+    void Engine::pushPacket(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs)
+    {
+        if (auto const stream = _audioStream.load(); stream != _audioStreamProducer)
+        {
+            _audioStreamProducer = stream;
+            _gaps.reset();
+        }
+        std::size_t lost = 0;
+        if (ptsMs >= 0)
+        {
+            // An upstream loss: exactly its length of silence goes first (SPEC §6).
+            auto const unfilled = _gaps.unfilled();
+            if (lost = _gaps.onPacket(ptsMs, frames); lost > 0)
+            {
+                _fifo->pushSilence(lost);
+            }
+            _audioGaps.store(_gaps.gaps(), std::memory_order_relaxed);
+            _audioGapFrames.store(_gaps.gapFrames(), std::memory_order_relaxed);
+            _audioGapsUnfilled.store(_gaps.unfilled(), std::memory_order_relaxed);
+            if (_gaps.unfilled() > unfilled)
+            {
+                _audioLost.store(true); // a jump too long to fill: the tick lowers a raised target (lost, not late)
+            }
+        }
+        // Page channels beyond the flow's count are dropped, missing ones are silent.
+        auto const now = _clock.nowNs();
+        if (auto const stored = _fifo->push(planes, planeCount, frames, now); stored < frames)
+        {
+            // Cannot happen with the FIFO sized from the largest target; counted if it does, and
+            // logged at the 1st, 10th, 100th, … time (this is CEF's audio thread).
+            auto const count = _audioOverflows.fetch_add(1, std::memory_order_relaxed) + 1;
+            _audioOverflowFrames.fetch_add(frames - stored, std::memory_order_relaxed);
+            if (auto c = count; c > 0)
+            {
+                while (c % 10 == 0)
+                {
+                    c /= 10;
+                }
+                if (c == 1)
+                {
+                    log::warn("audio_fifo_overflow", {{"count", count}, {"dropped_frames", frames - stored}, {"capacity_frames", _fifo->capacity()}});
+                }
+            }
+        }
+        timespec mono{};
+        clock_gettime(CLOCK_MONOTONIC, &mono);
+        recordAudio({now, AudioTraceKind::Packet, ptsMs, static_cast<std::int64_t>(frames), static_cast<std::int64_t>(_fifo->available()),
+                     static_cast<std::int64_t>(lost), static_cast<std::int64_t>(mono.tv_sec) * 1'000'000'000LL + mono.tv_nsec});
+    }
+
+    void Engine::audioStreamStarted()
+    {
+        _audioStream.fetch_add(1);
+    }
+
+    void Engine::setAudioActive(bool active, bool drain)
+    {
+        _audioDrain.store(!active && drain);
         _audioActive.store(active);
     }
 
@@ -282,8 +437,11 @@ namespace mbs::engine
     std::uint64_t Engine::nextVisibleIndex() const
     {
         // The BeginFrame of the current grain may still draw it; its paint is committed at the
-        // next tick and leaves the delay ring videoDelayGrains later.
-        return _clock.indexAt(_clock.nowNs()) + 1 + _settings.pipelineGrains + _settings.videoDelayGrains;
+        // next tick and leaves the delay ring the video delay later.
+        // Internal frame clock: Chromium's next BeginFrame is at T(k) + φ, the same place.
+        auto const now = _clock.nowNs();
+        auto const base = _frameClock && now >= _settings.framePhaseNs ? now - _settings.framePhaseNs : now;
+        return _clock.indexAt(base) + 1 + _settings.pipelineGrains + _videoDelayNow.load();
     }
 
     EngineStats Engine::stats() const
@@ -292,6 +450,18 @@ namespace mbs::engine
         EngineStats out = _stats;
         out.paintsDropped = _store.dropped();
         out.latePaints = out.paintsDropped + out.convertedUnused;
+        out.audioGaps = _audioGaps.load(std::memory_order_relaxed);
+        out.audioGapFrames = _audioGapFrames.load(std::memory_order_relaxed);
+        out.audioGapsUnfilled = _audioGapsUnfilled.load(std::memory_order_relaxed);
+        out.audioFifoOverflows = _audioOverflows.load(std::memory_order_relaxed);
+        out.audioFifoOverflowFrames = _audioOverflowFrames.load(std::memory_order_relaxed);
+        out.audioFifoFrames = _fifo ? _fifo->capacity() : 0;
+        out.internalFrameClock = _frameClock != nullptr;
+        out.videoDelayGrains = _videoDelayNow.load(std::memory_order_relaxed);
+        if (_frameClock)
+        {
+            out.frameClock = _frameClock->stats();
+        }
         return out;
     }
 
@@ -424,6 +594,7 @@ namespace mbs::engine
             log::warn("tick_priority_normal", {{"reason", "SCHED_FIFO needs RLIMIT_RTPRIO >= 10 or CAP_SYS_NICE"}});
         }
         Tick tick(*this);
+        tick.sendBeginFrames(!_frameClock); // internal: Chromium paces itself
         std::uint64_t next = _clock.indexAt(_clock.nowNs()) + 1;
         while (!_stop.load())
         {
@@ -444,6 +615,13 @@ namespace mbs::engine
                 std::lock_guard lock{_statsMutex};
                 _stats.tick = tick.counters();
             }
+            if (_frameClock && _anchorFrameClock)
+            {
+                if (auto const target = _frameClock->poll(_clock.indexNs(now + 1), _clock.monotonicOffsetNs(), _clock.nowNs()); target != 0)
+                {
+                    _anchorFrameClock(target);
+                }
+            }
             next = now + 1;
         }
     }
@@ -455,15 +633,19 @@ namespace mbs::engine
         std::uint64_t beginFrameNs = 0;
         {
             std::lock_guard lock{_setsMutex};
-            if (state == PageState::Ready && !_pending.empty())
+            if (state == PageState::Ready)
             {
                 // The oldest converted frame (SPEC §2.4). Without the pipeline at most one waits,
                 // the newest. With it up to two wait: a paint that missed its tick is shown at the
                 // next one instead of being replaced, and the frame behind it waits one period.
-                _current = _pending.front();
-                _pending.erase(_pending.begin());
-                fresh = true;
-                beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
+                // Without a new frame a ready page holds its last one, whatever on_page_error says.
+                if (!_pending.empty())
+                {
+                    _current = _pending.front();
+                    _pending.erase(_pending.begin());
+                    fresh = true;
+                    beginFrameNs = _poolBeginFrame[static_cast<std::size_t>(_current)];
+                }
             }
             else if (_settings.onPageError == Substitute::Transparent)
             {
@@ -474,8 +656,25 @@ namespace mbs::engine
                 _current = kBlack;
             }
             // Hold keeps the last frame; converted paints wait in _pending for the page to be ready.
-            _ring[index % _ring.size()] = _current;
-            out = _ring[(index + 1) % _ring.size()]; // what was current videoDelayGrains ticks ago
+            // The delay grows one grain per tick towards the wanted one (a repeat: the video holds
+            // while the audio played the silence that raised its target). It shrinks by at most one
+            // grain per kDelayDecreaseTicks (a skip): a target that falls in one step (no stream any
+            // more, or late audio that was lost) gives single skipped frames half a second apart,
+            // never a run of them.
+            _ticksSinceDecrease = std::min(_ticksSinceDecrease + 1, kDelayDecreaseTicks);
+            if (_videoDelayWanted > _videoDelay)
+            {
+                ++_videoDelay;
+            }
+            else if (_videoDelayWanted < _videoDelay && _ticksSinceDecrease >= kDelayDecreaseTicks)
+            {
+                --_videoDelay;
+                _ticksSinceDecrease = 0;
+            }
+            _videoDelayNow.store(_videoDelay, std::memory_order_relaxed);
+            auto const size = _ring.size();
+            _ring[index % size] = _current;
+            out = _ring[(index + size - _videoDelay) % size]; // what was current _videoDelay ticks ago
         }
         // `out` stays in the ring until the next tick, so the converter does not reuse it.
         auto const& frame = buffers(out);
@@ -517,20 +716,54 @@ namespace mbs::engine
             _resampler->setTarget(*_fifo, static_cast<std::size_t>(target));
         }
         bool const active = _audioActive.load();
+        auto const stream = _audioStream.load();
         float* out = _audioBuffer.data();
+        if (_audioLost.exchange(false))
+        {
+            _resampler->lost(*_fifo);
+        }
         if (active)
         {
-            if (!_audioWasActive)
+            if (!_audioWasActive || stream != _audioStreamSeen)
             {
-                _resampler->reset(*_fifo); // a new stream starts from the target fill
+                _resampler->start(); // a stream starts at the target fill (its first sample is not cut)
             }
-            _resampler->produce(*_fifo, out, frames, _clock.nowNs());
+            _audioDraining = false;
+            auto const now = _clock.nowNs();
+            auto const before = _resampler->fill(*_fifo);
+            _resampler->produce(*_fifo, out, frames, now);
+            auto const& st = _resampler->stats();
+            recordAudio({now, AudioTraceKind::Tick, static_cast<std::int64_t>(before), static_cast<std::int64_t>(_resampler->target()),
+                         static_cast<std::int64_t>(st.underrunFrames), static_cast<std::int64_t>(st.realigned),
+                         static_cast<std::int64_t>(_resampler->fill(*_fifo))});
         }
         else
         {
-            std::fill(out, out + frames * channels, 0.f); // the flow never stops (SPEC §6)
+            if (_audioWasActive)
+            {
+                _audioDraining = _audioDrain.load(); // the stream ended: play out what the FIFO holds
+            }
+            if (_audioDraining)
+            {
+                _audioDraining = _resampler->drain(*_fifo, out, frames);
+            }
+            else
+            {
+                std::fill(out, out + frames * channels, 0.f); // the flow never stops (SPEC §6)
+                _resampler->idle(_clock.nowNs()); // no stream: a raised target (and the video delay) goes back
+            }
         }
         _audioWasActive = active;
+        _audioStreamSeen = stream;
+        if (_settings.videoDelayMaxGrains > _settings.videoDelayGrains)
+        {
+            // Lip sync: the video is delayed by what the adaptive target added, in whole grains of
+            // the nominal length (800.8 frames at 59.94, not this tick's 800 or 801: dividing by
+            // those flipped the rounding every fifth tick near a half grain, a repeat and a skip).
+            double const grainFrames = static_cast<double>(_clock.sampleAt(index + 1000) - first) / 1000.0;
+            auto const grains = videoDelayExtraGrains(_resampler->extraFrames(), grainFrames);
+            _videoDelayWanted = std::min(_settings.videoDelayMaxGrains, _settings.videoDelayGrains + grains);
+        }
         if (_audioEnabled.load())
         {
             _outputs.writeAudio(end, out, frames);

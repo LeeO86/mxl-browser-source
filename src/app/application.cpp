@@ -377,6 +377,13 @@ namespace mbs::app
             double const videoMs = periodMs * (_cfg.frameLead + _cfg.framePipeline + (_renderRequested == cef::RenderMode::Gpu ? 1 : 0));
             es.videoDelayGrains = static_cast<std::uint32_t>(std::max(0L, std::lround((audioMs - videoMs) / periodMs)));
         }
+        if (_cfg.audioChannels > 0 && _cfg.audioBufferMaxMs > _cfg.audioBufferMs)
+        {
+            // Adaptive target (SPEC §6): the video delay follows what underruns add to the target, so
+            // the ring and the pool hold that many grains more.
+            es.audioMaxTargetFrames = static_cast<std::uint32_t>(_cfg.audioBufferMaxMs * 48);
+            es.videoDelayMaxGrains = es.videoDelayGrains + static_cast<std::uint32_t>(std::ceil((_cfg.audioBufferMaxMs - _cfg.audioBufferMs) / periodMs));
+        }
         switch (_cfg.onPageError)
         {
         case config::PageErrorMode::Transparent: es.onPageError = engine::Substitute::Transparent; break;
@@ -388,13 +395,32 @@ namespace mbs::app
         es.realtime = _cfg.realtime;
         es.pipelineGrains = static_cast<std::uint32_t>(_cfg.framePipeline);
         es.convertThreads = static_cast<unsigned>(_cfg.convertThreads);
+        if (_cfg.frameClock == config::FrameClockMode::Internal)
+        {
+            // Chromium's frame rate is an integer and its period whole microseconds
+            // (CefRenderWidgetHostViewOSR::SetFrameRate): 59.94 and 29.97 cannot be expressed
+            // and keep external BeginFrames.
+            if (_cfg.format.rateNum % _cfg.format.rateDen == 0 && 1'000'000 % (_cfg.format.rateNum / _cfg.format.rateDen) == 0)
+            {
+                es.internalFrameClock = true;
+                es.framePeriodNs = 1'000'000'000ULL * static_cast<std::uint64_t>(_cfg.format.rateDen) / static_cast<std::uint64_t>(_cfg.format.rateNum);
+                es.framePhaseNs = static_cast<std::uint64_t>(_cfg.frameClockPhaseMs) * 1'000'000ULL;
+            }
+            else
+            {
+                log::warn("frame_clock_fallback", {{"format", _cfg.format.name}, {"reason", "the internal frame clock needs an integer frame rate; using external BeginFrames"}});
+            }
+        }
+        _internalFrameClock = es.internalFrameClock;
         _engine = std::make_unique<engine::Engine>(es, *_clock, *_outputs, _metrics);
         _engine->setAvOffsetMs(_cfg.avOffsetMs);
         for (auto const& [name, enabled] : _doc->senders())
         {
             _engine->setEnabled(name == "key" ? engine::Flow::Key : name == "audio" ? engine::Flow::Audio : engine::Flow::Video, enabled);
         }
-        log::info("mxl_ready", {{"domain", _domainDir}, {"domain_id", _domainId}, {"video_delay_grains", es.videoDelayGrains}});
+        log::info("mxl_ready", {{"domain", _domainDir}, {"domain_id", _domainId}, {"video_delay_grains", es.videoDelayGrains},
+                                   {"video_delay_max_grains", std::max(es.videoDelayGrains, es.videoDelayMaxGrains)}, {"audio_buffer_max_ms", std::max(_cfg.audioBufferMs, _cfg.audioBufferMaxMs)},
+                                   {"frame_clock", es.internalFrameClock ? "internal" : "external"}, {"frame_clock_phase_ms", static_cast<int>(es.framePhaseNs / 1'000'000)}});
     }
 
     void Application::prepareBrowserEnvironment()
@@ -451,6 +477,36 @@ namespace mbs::app
             fs::remove_all(_cachePath, ec);
             fs::create_directories(_cachePath, ec);
         }
+        // Chromium's persistent histograms (<cache>/BrowserMetrics/*.pma) are a shared file mapping
+        // that every thread recording a histogram writes, among them the capture thread that calls
+        // OnAudioStreamPacket. On a journaling disk file system the first write to a page that
+        // writeback cleaned waits for the journal commit: with a busy disk the page's audio stalled
+        // for 100-350 ms (docs/performance.md, M7). Neither --disable-features=PersistentHistograms
+        // nor its storage parameter moves it in CEF 144, so the directory is a link into /dev/shm
+        // when the cache is not on a tmpfs already (SPEC §6).
+        auto const metrics = _cachePath + "/BrowserMetrics";
+        if (!mxlio::isTmpfs(_cachePath) && fs::is_directory("/dev/shm", ec) && mxlio::isTmpfs("/dev/shm"))
+        {
+            // Per NMOS seed and uid: instances that share /dev/shm never clear each other's.
+            auto const target = mxlio::metricsShmDir("/dev/shm", _cfg.nmosSeed, static_cast<unsigned>(::getuid()));
+            std::string error;
+            if (mxlio::linkToFreshDir(metrics, target, error))
+            {
+                log::info("browser_metrics_on_tmpfs", {{"path", target}, {"ok", true}});
+            }
+            else
+            {
+                log::warn("browser_metrics_on_tmpfs", {{"path", target}, {"ok", false}, {"error", error}});
+                if (fs::is_symlink(metrics, ec))
+                {
+                    fs::remove(metrics, ec); // Chromium makes the directory in the cache instead
+                }
+            }
+        }
+        else if (fs::is_symlink(metrics, ec))
+        {
+            fs::remove(metrics, ec); // a link from an earlier start: Chromium makes the directory
+        }
     }
 
     void Application::startCef()
@@ -496,6 +552,8 @@ namespace mbs::app
         bs.deviceScaleFactor = source.deviceScaleFactor;
         bs.frameRate = static_cast<int>(std::ceil(static_cast<double>(_cfg.format.rateNum) / static_cast<double>(_cfg.format.rateDen)));
         bs.background = config::parseBackground(source.background).value_or(0);
+        bs.externalBeginFrames = !_internalFrameClock;
+        bs.audioChannels = _cfg.audioChannels;
         bs.popupsSameWindow = _cfg.popupsSameWindow;
         bs.confirmAccept = _cfg.confirmAccept;
         _browser = std::make_unique<cef::Browser>(bs, *this, urlPolicy(source.mode));
@@ -521,6 +579,15 @@ namespace mbs::app
                 _browser->beginFrame([this, posted] { _engine->beginFrameDispatched(posted); });
             }
         });
+        _engine->setAnchorFrameClock([this](std::uint64_t target) {
+            if (!_browserReady.load())
+            {
+                _engine->frameClockSkipped(); // no browser yet: not a late anchor
+                return;
+            }
+            _browser->anchorFrameClock(
+                target, [this] { return _clock->nowNs(); }, [this, target](std::uint64_t called) { _engine->frameClockAnchored(target, called); });
+        });
         _engine->setAudioActive(false);
         _browser->create();
 
@@ -539,7 +606,26 @@ namespace mbs::app
         _http = std::make_unique<ops::HttpServer>([this](ops::HttpRequest const& req, ops::HttpResponse& res) { handle(req, res); },
             [this](ops::HttpRequest const& req, ops::HttpResponse& reject) { return upgrade(req, reject); },
             [this](int fd, ops::HttpRequest const& req) { return devtoolsTunnel(fd, req); });
-        _http->streamLargeBodies({ograf::isUploadRequest, static_cast<std::size_t>(_cfg.ografUploadMaxMb) << 20, _cfg.ografDir + "/tmp"});
+        // The token is checked from the head, before the body is stored (docs/ograf.md §6).
+        ops::LargeBodies uploads{ograf::isUploadRequest, static_cast<std::size_t>(_cfg.ografUploadMaxMb) << 20, _cfg.ografDir + "/tmp"};
+        uploads.admit = [this](ops::HttpRequest const& req, ops::HttpResponse& reject) {
+            if (authorized(req))
+            {
+                return true;
+            }
+            reject = {};
+            if (_ografApi)
+            {
+                ograf::unauthorized(*_ografApi, req, reject);
+            }
+            else
+            {
+                reject.status = 401;
+                reject.body = R"({"error":"token required"})";
+            }
+            return false;
+        };
+        _http->streamLargeBodies(std::move(uploads));
         std::string error;
         if (!_http->start(_cfg.webPort, error))
         {
@@ -644,6 +730,7 @@ namespace mbs::app
     void Application::onBrowserCreated()
     {
         _browserReady.store(true);
+        _engine->relockFrameClock(engine::LockReason::Start);
         _browser->invalidate();
         log::info("browser_created", {});
     }
@@ -690,13 +777,15 @@ namespace mbs::app
             _audioStream = true;
             active = _doc->source().audio;
         }
+        _engine->audioStreamStarted();
         _engine->setAudioActive(active);
+        _metrics.inc("audio_stream_events_total", {{"event", "started"}});
         log::info("audio_stream_started", {{"channels", channels}});
     }
 
-    void Application::onAudioPacket(float const* const* planes, int channels, int frames)
+    void Application::onAudioPacket(float const* const* planes, int channels, int frames, std::int64_t ptsMs)
     {
-        _engine->pushAudio(planes, channels, static_cast<std::size_t>(frames));
+        _engine->pushAudio(planes, channels, static_cast<std::size_t>(frames), ptsMs);
     }
 
     void Application::onAudioStopped()
@@ -705,7 +794,17 @@ namespace mbs::app
             std::lock_guard lock{_pageMutex};
             _audioStream = false;
         }
-        _engine->setAudioActive(false);
+        // CEF stops the stream 2 s after the page went quiet (or after an error): play out what
+        // the FIFO still holds instead of cutting it.
+        _engine->setAudioActive(false, true);
+        _metrics.inc("audio_stream_events_total", {{"event", "stopped"}});
+        log::info("audio_stream_stopped", {});
+    }
+
+    void Application::onAudioError(std::string const& message)
+    {
+        _metrics.inc("audio_stream_events_total", {{"event", "error"}});
+        log::warn("audio_stream_error", {{"message", message}});
     }
 
     void Application::onLoadStart(std::string const& url)
@@ -753,6 +852,7 @@ namespace mbs::app
         _metrics.inc("page_loads_total", {{"result", httpStatus >= 400 ? "error" : "ok"}});
         _metrics.observe("page_load_seconds", {}, seconds);
         setPage(PageStatus::Loaded, "");
+        _engine->relockFrameClock(engine::LockReason::Load); // a new renderer view starts its own timebase
         injectAfterLoad();
         if (url.starts_with(kOgrafUrl))
         {

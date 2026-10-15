@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Video cadence test (docs/performance.md, M6): plays ?src= (a file next to this page, or a URL)
+     full-frame with sound, looped. tests/media/make_clips.sh makes clips whose frames carry their
+     number as counter.html's bar code, so grain_reader counter reads the content cadence from MXL.
+     window.mbsVideoStats() answers Chromium's own view: requestVideoFrameCallback steps (presented
+     frames, media frames per callback) and getVideoPlaybackQuality(). ?post=N posts the stats
+     every N seconds through window.mxlBrowserSource.post (GET /api/v1/events). -->
+<html><head><meta charset="utf-8"><title>video</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}video{position:fixed;left:0;top:0;width:100vw;height:100vh;object-fit:fill}</style></head>
+<body><video id="v" autoplay playsinline></video>
+<script>
+const q = new URLSearchParams(location.search);
+const v = document.getElementById("v");
+v.loop = q.get("loop") !== "0";
+v.src = q.get("src") || "clip-50.webm";
+const fps = Number(q.get("fps") || 0);
+const s = {callbacks: 0, presentedSteps: {}, mediaSteps: {}, lastPresented: -1, lastMedia: -1, start: performance.now()};
+function step(map, k) { map[k] = (map[k] || 0) + 1; }
+function onFrame(now, meta) {
+  s.callbacks++;
+  if (s.lastPresented >= 0) step(s.presentedSteps, Math.min(meta.presentedFrames - s.lastPresented, 9));
+  if (s.lastMedia >= 0 && fps > 0) step(s.mediaSteps, Math.max(-1, Math.min(Math.round((meta.mediaTime - s.lastMedia) * fps), 9)));
+  s.lastPresented = meta.presentedFrames;
+  s.lastMedia = meta.mediaTime;
+  v.requestVideoFrameCallback(onFrame);
+}
+v.requestVideoFrameCallback(onFrame);
+window.mbsVideoStats = () => {
+  const p = v.getVideoPlaybackQuality();
+  return {type: "video-stats", src: v.currentSrc, currentTime: v.currentTime, paused: v.paused, readyState: v.readyState,
+    width: v.videoWidth, height: v.videoHeight, total: p.totalVideoFrames, dropped: p.droppedVideoFrames,
+    callbacks: s.callbacks, presentedSteps: s.presentedSteps, mediaSteps: s.mediaSteps, seconds: (performance.now() - s.start) / 1000};
+};
+const every = Number(q.get("post") || 0);
+if (every > 0) setInterval(() => window.mxlBrowserSource && window.mxlBrowserSource.post(window.mbsVideoStats()), every * 1000);
+</script></body></html>

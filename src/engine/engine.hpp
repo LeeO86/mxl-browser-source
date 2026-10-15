@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "audio/fifo.hpp"
+#include "audio/gaps.hpp"
 #include "audio/resampler.hpp"
+#include "engine/frameclock.hpp"
 #include "engine/framestore.hpp"
 #include "engine/tick.hpp"
 #include "util/metrics.hpp"
+#include "util/tracering.hpp"
 
 namespace mbs::engine
 {
@@ -34,6 +37,8 @@ namespace mbs::engine
         [[nodiscard]] virtual std::uint64_t indexNs(std::uint64_t index) const = 0;  // TAI start of a grain index
         [[nodiscard]] virtual std::uint64_t sampleAt(std::uint64_t index) const = 0; // 48 kHz sample index at that start
         virtual void sleepUntil(std::uint64_t taiNs) = 0;
+        /// TAI − CLOCK_MONOTONIC (Chromium's clock) now; the internal frame clock follows it.
+        [[nodiscard]] virtual std::int64_t monotonicOffsetNs() const { return 0; }
     };
 
     /// The converted buffers of one frame (SPEC §5.3).
@@ -82,13 +87,21 @@ namespace mbs::engine
         bool straightFill = true;         // un-premultiply the fill (only with a key)
         std::uint32_t audioChannels = 2;  // 0: no audio flow
         std::uint32_t audioTargetFrames = 2880; // FIFO target (60 ms)
+        std::uint32_t audioMaxTargetFrames = 0; // > audioTargetFrames: the target rises after underruns up to this (BROWSER_AUDIO_BUFFER_MAX_MS)
         std::uint32_t videoDelayGrains = 0;
+        std::uint32_t videoDelayMaxGrains = 0;  // the video delay follows the audio target up to this (ring and pool sized for it)
         std::uint32_t pipelineGrains = 0; // 1: up to two converted frames wait and the oldest is committed, so a late paint is shown one tick later instead of dropped (BROWSER_FRAME_PIPELINE)
         std::uint64_t marginNs = 1'000'000; // wake this long after the grain start (ε)
         Substitute onPageError = Substitute::Hold;
         std::uint32_t previewWidth = 960; // 0: no preview
         unsigned convertThreads = 4;      // bands of rows converted in parallel (latency, not CPU)
         bool realtime = true;             // tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO (or CAP_SYS_NICE) allows
+        // BROWSER_FRAME_CLOCK=internal: Chromium's own BeginFrames at the house rate, phase-locked
+        // to T(k) + framePhaseNs; the tick sends none. `framePeriodNs` is Chromium's period.
+        bool internalFrameClock = false;
+        std::uint64_t framePeriodNs = 20'000'000;
+        std::uint64_t framePhaseNs = 0;
+        std::uint64_t frameLockThresholdNs = 1'000'000;
     };
 
     /// One event of the frame-loop trace (docs/performance.md, "Where the time goes"). `ns` is TAI.
@@ -101,6 +114,7 @@ namespace mbs::engine
         Paint,            // OnPaint copied; a: paint sequence, b: OnPaint entry time
         ConvertStart,     // a: paint sequence, b: its BeginFrame time
         ConvertEnd,       // a: paint sequence, b: buffer set
+        Anchor,           // internal frame clock anchored; a: target time, b: call time (0: too late, not anchored)
     };
 
     struct TraceEvent
@@ -109,6 +123,24 @@ namespace mbs::engine
         TraceKind kind = TraceKind::Tick;
         std::uint64_t a = 0;
         std::uint64_t b = 0;
+    };
+
+    /// One event of the audio trace (docs/api.md, /api/v1/debug/audio-trace). `ns` is TAI.
+    enum class AudioTraceKind : std::uint8_t
+    {
+        Packet, // OnAudioStreamPacket; a: pts (ms, wall time as CEF 144 gives it: TAI − pts ≈ 37 s + latency), b: frames, c: FIFO frames after it, d: silence put before it (gap fill), e: arrival (CLOCK_MONOTONIC ns)
+        Tick,   // the tick wrote a grain; a: FIFO frames before it, b: target frames, c: underrun frames (total), d: frames dropped as late (total), e: FIFO frames after it
+    };
+
+    struct AudioTraceEvent
+    {
+        std::uint64_t ns = 0;
+        AudioTraceKind kind = AudioTraceKind::Packet;
+        std::int64_t a = 0;
+        std::int64_t b = 0;
+        std::int64_t c = 0;
+        std::int64_t d = 0;
+        std::int64_t e = 0;
     };
 
     struct EngineStats
@@ -120,8 +152,27 @@ namespace mbs::engine
         std::uint64_t paintsRejected = 0;  // wrong size (a resize in flight)
         std::uint64_t latePaints = 0;      // paints never committed: a newer one arrived before the tick (late or superseded)
         audio::ResamplerStats audio;
+        std::uint64_t audioGaps = 0;         // upstream losses found in the packet times
+        std::uint64_t audioGapFrames = 0;    // silence put in their place
+        std::uint64_t audioGapsUnfilled = 0; // jumps too long to fill (left to the FIFO)
+        std::uint64_t audioFifoOverflows = 0;      // packets that did not fit into the FIFO (cannot happen at its size)
+        std::uint64_t audioFifoOverflowFrames = 0; // frames dropped for them
+        std::size_t audioFifoFrames = 0;           // FIFO capacity
         std::vector<double> audioPeakDbfs; // per flow channel, last grain
+        bool internalFrameClock = false;
+        FrameClockStats frameClock;
+        std::uint32_t videoDelayGrains = 0; // now (the base plus what the adaptive audio target added)
     };
+
+    /// BROWSER_AV_OFFSET_MS is at most 500 ms (config), in frames: it adds to the FIFO target.
+    inline constexpr std::uint32_t kMaxAvOffsetFrames = 500 * 48;
+
+    /// The video delay for what the adaptive audio target adds: whole grains of the nominal grain
+    /// length `grainFrames` (48000·den/num), rounded.
+    std::uint32_t videoDelayExtraGrains(double extraFrames, double grainFrames);
+
+    /// The page audio FIFO's capacity: room for the largest target up to the overrun cut.
+    std::size_t audioFifoFrames(EngineSettings const& settings);
 
     class Engine final : TickActions
     {
@@ -134,6 +185,15 @@ namespace mbs::engine
 
         /// Posts one BeginFrame to the UI thread. Set before start().
         void setRequestFrame(std::function<void()> request);
+        /// Internal frame clock: asks the UI thread to call SetWindowlessFrameRate at TAI `targetNs`
+        /// and to report with frameClockAnchored(). Set before start().
+        void setAnchorFrameClock(std::function<void(std::uint64_t targetNs)> anchor);
+        /// UI thread: the anchor for `targetNs` ran at TAI `calledNs` (0: too late, not run).
+        void frameClockAnchored(std::uint64_t targetNs, std::uint64_t calledNs);
+        /// The anchor could not run because there is no browser yet: not counted as late, asked again.
+        void frameClockSkipped();
+        /// A new compositor timebase may have come with a new renderer view: anchor again.
+        void relockFrameClock(LockReason reason);
         /// Starts the converter and the tick thread.
         void start();
         /// Stops both after the current grain. Idempotent.
@@ -151,10 +211,17 @@ namespace mbs::engine
         void setPageState(PageState state);
         [[nodiscard]] PageState pageState() const { return _pageState.load(); }
 
-        /// CEF's audio thread: one packet of planar float samples.
-        void pushAudio(float const* const* planes, int planeCount, std::size_t frames);
+        /// CEF's audio thread: one packet of planar float samples, captured at `ptsMs` (CLOCK_MONOTONIC
+        /// in ms; < 0: unknown, no gap detection).
+        void pushAudio(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs = -1);
+        /// Diagnosis (POST /api/v1/debug/audio-hold): packets arriving in the next `ms` are held
+        /// and then delivered at once with their own times, as Chromium's late bursts do.
+        void holdAudio(std::uint32_t ms);
+        /// A new audio stream begins (its packet times start a new timeline).
+        void audioStreamStarted();
         /// No page audio (no stream, or the source has `audio: false`): the flow carries silence.
-        void setAudioActive(bool active);
+        /// `drain`: the stream ended, so what the FIFO still holds is played out first.
+        void setAudioActive(bool active, bool drain = false);
         void setAvOffsetMs(int offsetMs);
 
         void setEnabled(Flow flow, bool enabled);
@@ -176,6 +243,8 @@ namespace mbs::engine
         [[nodiscard]] EngineStats stats() const;
         /// The newest frame-loop events (about the last 40 s at 50 Hz), oldest first.
         [[nodiscard]] std::vector<TraceEvent> trace() const;
+        /// The newest audio packets and grains (about the last 100 s), oldest first.
+        [[nodiscard]] std::vector<AudioTraceEvent> audioTrace() const;
         [[nodiscard]] EngineSettings const& settings() const { return _settings; }
 
     private:
@@ -187,6 +256,7 @@ namespace mbs::engine
         bool commit(std::uint64_t index, PageState state) override;
         void writeAudio(std::uint64_t index) override;
         void requestFrame() override;
+        [[nodiscard]] std::uint64_t internalBeginFrameNs(std::uint64_t nowNs) const;
 
         void converterLoop();
         void tickLoop();
@@ -194,6 +264,7 @@ namespace mbs::engine
         int freeSetLocked() const;
         void makePreview(std::uint8_t const* bgra, std::uint64_t ticket);
         void record(TraceKind kind, std::uint64_t ns, std::uint64_t a = 0, std::uint64_t b = 0);
+        void recordAudio(AudioTraceEvent const& event);
 
         EngineSettings _settings;
         Clock& _clock;
@@ -240,9 +311,42 @@ namespace mbs::engine
         std::unique_ptr<audio::Resampler> _resampler;
         std::vector<float> _audioBuffer;
         std::atomic<bool> _audioActive{false};
+        std::atomic<bool> _audioDrain{false};
+        std::atomic<std::uint64_t> _audioStream{0}; // stream generation, counted up at each start
         bool _audioWasActive = false;
+        bool _audioDraining = false;
+        std::uint64_t _audioStreamSeen = 0;         // tick thread
+        std::uint64_t _audioStreamProducer = 0;     // audio thread
+        audio::GapDetector _gaps;                   // audio thread
+        void pushPacket(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs);
+        struct HeldPacket
+        {
+            std::vector<float> samples; // planeCount × frames, planar
+            int planeCount = 0;
+            std::size_t frames = 0;
+            std::int64_t ptsMs = -1;
+        };
+        std::atomic<std::uint64_t> _holdUntilNs{0};
+        std::vector<HeldPacket> _held;              // audio thread (diagnosis only)
+        std::atomic<std::uint64_t> _audioGaps{0};
+        std::atomic<std::uint64_t> _audioGapFrames{0};
+        std::atomic<std::uint64_t> _audioGapsUnfilled{0};
+        std::atomic<bool> _audioLost{false}; // audio thread → tick: a pts jump too long to fill
+        std::atomic<std::uint64_t> _audioOverflows{0};
+        std::atomic<std::uint64_t> _audioOverflowFrames{0};
+
+        // Internal frame clock.
+        std::unique_ptr<FrameClock> _frameClock;
+        std::function<void(std::uint64_t)> _anchorFrameClock;
         std::atomic<int> _avOffsetMs{0};
         int _appliedAvOffsetMs = 0;
+        // The video delay follows the adaptive audio target (tick thread): writeAudio sets the
+        // wanted delay, commit moves towards it by one grain per tick (a repeat or a skip).
+        std::uint32_t _videoDelayWanted = 0;
+        std::uint32_t _videoDelay = 0;
+        static constexpr std::uint32_t kDelayDecreaseTicks = 25; // 0.5 s at 50p, 1 s at 25p
+        std::uint32_t _ticksSinceDecrease = kDelayDecreaseTicks;
+        std::atomic<std::uint32_t> _videoDelayNow{0};
 
         // Preview.
         std::uint32_t _previewWidth = 0;
@@ -253,12 +357,12 @@ namespace mbs::engine
         std::uint64_t _previewServed = 0; // the request ticket the newest preview answered
         std::vector<std::uint8_t> _previewScratch;
 
-        // Frame-loop trace: a ring of the newest events, one short lock per event.
+        // Frame-loop and audio traces (packets about 100/s, and grains): lock-free rings, so a
+        // reader never holds up the tick or CEF's threads.
         static constexpr std::size_t kTraceEvents = 12288;
-        mutable std::mutex _traceMutex;
-        std::vector<TraceEvent> _trace;
-        std::size_t _traceNext = 0;
-        bool _traceFull = false;
+        util::TraceRing<TraceEvent> _trace{kTraceEvents};
+        static constexpr std::size_t kAudioTraceEvents = 16384;
+        util::TraceRing<AudioTraceEvent> _audioTrace{kAudioTraceEvents};
 
         mutable std::mutex _statsMutex;
         EngineStats _stats;

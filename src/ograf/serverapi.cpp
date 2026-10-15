@@ -250,7 +250,7 @@ namespace mbs::ograf
                 {
                     ctx.layers.clearWhere(std::nullopt, graphic->id, "");
                 }
-                ctx.library.remove(graphic->id, ctx.layers.packagesInUse());
+                ctx.library.remove(graphic->id, [&ctx] { return ctx.layers.packagesInUse(); });
                 log::info("ograf_delete", {{"id", graphic->id}, {"client", req.peer}});
                 return json(res, 200, picojson::value(picojson::object{}));
             }
@@ -447,7 +447,7 @@ namespace mbs::ograf
                 {
                     return problem(res, 400, "send the ZIP as the request body");
                 }
-                auto const result = ctx.library.addZip(req.bodyFile, ctx.layers.packagesInUse());
+                auto const result = ctx.library.addZip(req.bodyFile, [&ctx] { return ctx.layers.packagesInUse(); });
                 log::info("ograf_upload", {{"status", result.status}, {"client", req.peer}});
                 if (ctx.metrics)
                 {

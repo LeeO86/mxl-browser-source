@@ -82,6 +82,11 @@ namespace mbs::ops
         std::function<bool(HttpRequest const&)> match;
         std::size_t maxBytes = 0;
         std::string dir; // must exist
+        /// Asked with the head, before a byte of the body is read or stored (the token check):
+        /// false with `reject` filled answers that and closes the connection, the body unread.
+        std::function<bool(HttpRequest const&, HttpResponse& reject)> admit = {};
+        std::size_t maxConcurrent = 2; // bodies streamed (or waiting for their answer) at once; more: 429
+        int deadlineMs = 600'000;      // for the whole body; a slower client gets 408 and its file is removed
     };
 
     class HttpServer

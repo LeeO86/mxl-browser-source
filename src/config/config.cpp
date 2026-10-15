@@ -60,11 +60,14 @@ namespace mbs::config
                 {"BROWSER_FILL", "straight", true, false, "straight or premultiplied fill when keyed"},
                 {"BROWSER_AUDIO_CHANNELS", "2", true, false, "0, 2, 8 or 16"},
                 {"BROWSER_AUDIO_BUFFER_MS", "60", true, false, "Audio FIFO target"},
+                {"BROWSER_AUDIO_BUFFER_MAX_MS", "300", true, false, "Adaptive audio target: underruns raise the FIFO target up to this, the video delay follows; at or below BROWSER_AUDIO_BUFFER_MS the target is fixed"},
                 {"BROWSER_AV_OFFSET_MS", "0", false, false, "Audio trim; positive delays audio"},
                 {"BROWSER_VIDEO_DELAY_GRAINS", "auto", true, false, "Video delay in grains for A/V alignment (auto or 0-10)"},
                 {"BROWSER_FRAME_LEAD", "1", true, false, "Video latency in periods assumed by BROWSER_VIDEO_DELAY_GRAINS=auto (1-2)"},
                 {"BROWSER_RENDER", "auto", true, false, "auto, gpu, software"},
                 {"BROWSER_FRAME_PIPELINE", "1", true, false, "1: each paint has two periods instead of one to reach its grain (one period more latency)"},
+                {"BROWSER_FRAME_CLOCK", "internal", true, false, "internal: Chromium's own frame clock at the house rate, phase-locked to TAI (25 and 50 Hz formats; 59.94 and 29.97 fall back to external); external: one BeginFrame per grain"},
+                {"BROWSER_FRAME_CLOCK_PHASE_MS", "0", true, false, "Internal frame clock: Chromium's BeginFrames this long after each grain start (0 to the period)"},
                 {"BROWSER_REALTIME", "true", true, false, "Tick and converter threads SCHED_FIFO when RLIMIT_RTPRIO >= 10 (or CAP_SYS_NICE) allows it"},
                 {"BROWSER_CONVERT_THREADS", "4", true, false, "Threads converting one frame in bands of rows (1-16)"},
                 {"BROWSER_ON_PAGE_ERROR", "hold", false, false, "hold, transparent, black, slate"},
@@ -433,12 +436,20 @@ namespace mbs::config
             throw ConfigError("BROWSER_AUDIO_CHANNELS", "must be 0, 2, 8 or 16");
         }
         c.audioBufferMs = parseInt("BROWSER_AUDIO_BUFFER_MS", get("BROWSER_AUDIO_BUFFER_MS"), 20, 500);
+        c.audioBufferMaxMs = parseInt("BROWSER_AUDIO_BUFFER_MAX_MS", get("BROWSER_AUDIO_BUFFER_MAX_MS"), 20, 500);
         c.avOffsetMs = parseInt("BROWSER_AV_OFFSET_MS", get("BROWSER_AV_OFFSET_MS"), -500, 500);
         c.videoDelayGrains = lower(get("BROWSER_VIDEO_DELAY_GRAINS")) == "auto" ? -1 : parseInt("BROWSER_VIDEO_DELAY_GRAINS", get("BROWSER_VIDEO_DELAY_GRAINS"), 0, 10);
         c.frameLead = parseInt("BROWSER_FRAME_LEAD", get("BROWSER_FRAME_LEAD"), 1, 2);
         c.realtime = parseBool("BROWSER_REALTIME", get("BROWSER_REALTIME"));
         c.framePipeline = parseInt("BROWSER_FRAME_PIPELINE", get("BROWSER_FRAME_PIPELINE"), 0, 1);
         c.convertThreads = parseInt("BROWSER_CONVERT_THREADS", get("BROWSER_CONVERT_THREADS"), 1, 16);
+        c.frameClock = parseEnum<FrameClockMode>("BROWSER_FRAME_CLOCK", get("BROWSER_FRAME_CLOCK"),
+            {{"external", FrameClockMode::External}, {"internal", FrameClockMode::Internal}});
+        c.frameClockPhaseMs = parseInt("BROWSER_FRAME_CLOCK_PHASE_MS", get("BROWSER_FRAME_CLOCK_PHASE_MS"), 0, 1000);
+        if (static_cast<std::int64_t>(c.frameClockPhaseMs) * c.format.rateNum >= 1000 * c.format.rateDen)
+        {
+            throw ConfigError("BROWSER_FRAME_CLOCK_PHASE_MS", "must be shorter than the frame period of " + c.format.name);
+        }
         c.render = parseEnum<Render>("BROWSER_RENDER", get("BROWSER_RENDER"), {{"auto", Render::Auto}, {"gpu", Render::Gpu}, {"software", Render::Software}});
         c.onPageError = parseEnum<PageErrorMode>("BROWSER_ON_PAGE_ERROR", get("BROWSER_ON_PAGE_ERROR"),
             {{"hold", PageErrorMode::Hold}, {"transparent", PageErrorMode::Transparent}, {"black", PageErrorMode::Black}, {"slate", PageErrorMode::Slate}});

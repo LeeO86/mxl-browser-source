@@ -698,7 +698,15 @@ namespace mbs::cef
         {
             params.sample_rate = 48000;
             params.frames_per_buffer = 480;
-            params.channel_layout = CEF_CHANNEL_LAYOUT_STEREO;
+            // SPEC §6: the layout of BROWSER_AUDIO_CHANNELS. Chromium mixes the page into it (a
+            // stereo page fills 1–2). 16 asks for 7.1: CEF has no discrete layout with a channel
+            // count, so channels 9–16 stay silent.
+            int channels = 2;
+            if (auto impl = _impl.lock())
+            {
+                channels = impl->settings.audioChannels;
+            }
+            params.channel_layout = channels >= 8 ? CEF_CHANNEL_LAYOUT_7_1 : CEF_CHANNEL_LAYOUT_STEREO;
             return true;
         }
         void OnAudioStreamStarted(CefRefPtr<CefBrowser>, CefAudioParameters const& params, int channels) override
@@ -709,11 +717,11 @@ namespace mbs::cef
                 impl->observer.onAudioStarted(channels, params.sample_rate);
             }
         }
-        void OnAudioStreamPacket(CefRefPtr<CefBrowser>, float const** data, int frames, int64_t) override
+        void OnAudioStreamPacket(CefRefPtr<CefBrowser>, float const** data, int frames, int64_t pts) override
         {
             if (auto impl = _impl.lock())
             {
-                impl->observer.onAudioPacket(data, _channels, frames);
+                impl->observer.onAudioPacket(data, _channels, frames, pts);
             }
         }
         void OnAudioStreamStopped(CefRefPtr<CefBrowser>) override
@@ -725,10 +733,11 @@ namespace mbs::cef
         }
         void OnAudioStreamError(CefRefPtr<CefBrowser>, CefString const& message) override
         {
-            log::warn("audio_stream_error", {{"message", message.ToString()}});
+            // CEF stops the stream itself after any error but a socket error (OnAudioStreamStopped
+            // follows); after a socket error packets keep coming, so the stream stays active.
             if (auto impl = _impl.lock())
             {
-                impl->observer.onAudioStopped();
+                impl->observer.onAudioError(message.ToString());
             }
         }
 
@@ -1080,11 +1089,11 @@ namespace mbs::cef
             impl->router->AddHandler(new PostHandler(impl->observer), false);
             CefWindowInfo info;
             info.SetAsWindowless(kNullWindowHandle);
-            info.external_begin_frame_enabled = true;
             CefBrowserSettings settings;
             std::string url;
             {
                 std::lock_guard lock{impl->mutex};
+                info.external_begin_frame_enabled = impl->settings.externalBeginFrames;
                 settings.windowless_frame_rate = std::clamp(impl->settings.frameRate, 1, 60);
                 settings.background_color = impl->settings.background;
                 url = impl->settings.url;
@@ -1128,6 +1137,40 @@ namespace mbs::cef
                 host->SendExternalBeginFrame();
             }
         });
+    }
+
+    void Browser::anchorFrameClock(std::uint64_t targetNs, std::function<std::uint64_t()> now, std::function<void(std::uint64_t)> done)
+    {
+        // The UI task wakes a few milliseconds early (CefPostDelayedTask counts whole
+        // milliseconds, and the UI thread may be copying a paint) and spins to the time. A task
+        // that comes later than kLateNs does nothing: the frame clock tries again at the next grain.
+        constexpr std::int64_t kEarlyMs = 3;
+        constexpr std::uint64_t kLateNs = 300'000;
+        constexpr std::uint64_t kMaxSpinNs = 8'000'000;
+        auto const ahead = static_cast<std::int64_t>(targetNs) - static_cast<std::int64_t>(now());
+        auto const delayMs = std::max<std::int64_t>(0, ahead / 1'000'000 - kEarlyMs);
+        auto impl = _impl;
+        auto task = [impl, targetNs, now = std::move(now), done = std::move(done)] {
+            auto host = impl->host();
+            auto t = now();
+            if (!host || t > targetNs + kLateNs || targetNs > t + kMaxSpinNs)
+            {
+                done(0);
+                return;
+            }
+            while ((t = now()) < targetNs)
+            {
+                __builtin_ia32_pause();
+            }
+            int rate = 0;
+            {
+                std::lock_guard lock{impl->mutex};
+                rate = std::clamp(impl->settings.frameRate, 1, 60);
+            }
+            host->SetWindowlessFrameRate(rate); // CefRenderWidgetHostViewOSR::SetFrameRate: timebase = Now()
+            done(t);
+        };
+        CefPostDelayedTask(TID_UI, base::BindOnce([](std::function<void()> t) { t(); }, std::function<void()>(std::move(task))), delayMs);
     }
 
     void Browser::invalidate()
