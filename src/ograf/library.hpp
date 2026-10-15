@@ -4,6 +4,7 @@
 // an older package. Thread-safe. No CEF here.
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -41,6 +42,11 @@ namespace mbs::ograf
         picojson::value body;
     };
 
+    /// The packages layers use now. Asked with the library's lock held, right before packages are
+    /// deleted, so a layer that loaded a graphic meanwhile is seen (LayerSet::load checks again
+    /// after recording its package). Empty: none.
+    using InUse = std::function<std::set<std::string>()>;
+
     class Library
     {
     public:
@@ -49,9 +55,9 @@ namespace mbs::ograf
         /// Reads index.json, clears tmp/. Throws std::runtime_error when the folder cannot be made.
         void load();
 
-        /// Adds every graphic of one ZIP, or none (docs/ograf.md §4). `inUse` are the packages
-        /// layers use now (kept when a graphic moves to a new package).
-        UploadResult addZip(std::string const& zipPath, std::set<std::string> const& inUse);
+        /// Adds every graphic of one ZIP, or none (docs/ograf.md §4). Packages in `inUse` are kept
+        /// when a graphic moves to a new package.
+        UploadResult addZip(std::string const& zipPath, InUse const& inUse);
 
         [[nodiscard]] std::vector<Graphic> list() const; // listed graphics, by name
         [[nodiscard]] std::optional<Graphic> find(std::string const& id) const;
@@ -59,9 +65,9 @@ namespace mbs::ograf
         [[nodiscard]] std::optional<Graphic> findInPackage(std::string const& package, std::string const& id) const;
 
         /// Unlists `id`; its files stay while a package in `inUse` needs them. False when unknown.
-        bool remove(std::string const& id, std::set<std::string> const& inUse);
+        bool remove(std::string const& id, InUse const& inUse);
         /// Deletes packages that neither a listed graphic nor `inUse` refers to.
-        void collect(std::set<std::string> const& inUse);
+        void collect(InUse const& inUse);
 
         /// Absolute path of a package file, empty when it does not exist or leaves the package.
         [[nodiscard]] std::string filePath(std::string const& package, std::string const& rel) const;
@@ -70,7 +76,7 @@ namespace mbs::ograf
 
     private:
         bool saveLocked() const;
-        void collectLocked(std::set<std::string> const& inUse);
+        void collectLocked(InUse const& inUse);
 
         std::string _dir;
         RenderInfo _render;

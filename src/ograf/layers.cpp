@@ -104,25 +104,47 @@ namespace mbs::ograf
         {
             return problem(404, "Not found", "no layer " + std::to_string(layer) + " (1 to 8)");
         }
-        auto const graphic = _library.find(graphicId);
+        std::string instance = randomId();
+        std::optional<Graphic> graphic;
+        // An upload or delete may collect the package between find() and recording it here. The
+        // library asks packagesInUse() under its lock just before it deletes, so once the package
+        // is recorded it is either kept, or already gone from the library: then look again.
+        for (int attempt = 0; attempt < 3; ++attempt)
+        {
+            graphic = _library.find(graphicId);
+            if (!graphic)
+            {
+                break;
+            }
+            {
+                std::lock_guard lock{_mu};
+                auto& l = at(layer);
+                l = Layer{};
+                l.number = layer;
+                l.state = "loading";
+                l.graphicId = graphic->id;
+                l.graphicName = graphic->name;
+                l.package = graphic->package;
+                l.stepCount = graphic->stepCount();
+                l.instanceId = instance;
+                l.data = data;
+                l.pending = 1;
+            }
+            if (_library.findInPackage(graphic->package, graphic->id))
+            {
+                break;
+            }
+            graphic.reset();
+        }
         if (!graphic)
         {
-            return problem(404, "Not found", "no graphic '" + graphicId + "' in the library");
-        }
-        std::string instance = randomId();
-        {
             std::lock_guard lock{_mu};
-            auto& l = at(layer);
-            l = Layer{};
-            l.number = layer;
-            l.state = "loading";
-            l.graphicId = graphic->id;
-            l.graphicName = graphic->name;
-            l.package = graphic->package;
-            l.stepCount = graphic->stepCount();
-            l.instanceId = instance;
-            l.data = data;
-            l.pending = 1;
+            if (at(layer).instanceId == instance)
+            {
+                at(layer) = Layer{};
+                at(layer).number = layer;
+            }
+            return problem(404, "Not found", "no graphic '" + graphicId + "' in the library");
         }
         changed();
         auto const module = "https://ograf.local/packages/" + graphic->package + "/" + graphic->mainPath();
@@ -355,15 +377,23 @@ namespace mbs::ograf
         {
             return;
         }
-        std::lock_guard lock{_mu};
+        // The library is asked before the layers' lock is taken: the library asks the layers
+        // (packagesInUse) under its own lock, so the two are never taken in the other order.
+        std::vector<std::pair<picojson::value, Graphic>> found;
         for (auto const& item : doc.get("layers").get<picojson::array>())
         {
             int const n = item.get("layer").is<double>() ? static_cast<int>(item.get("layer").get<double>()) : 0;
             auto const graphic = validLayer(n) ? _library.findInPackage(item.get("package").to_str(), item.get("graphicId").to_str()) : std::nullopt;
-            if (!graphic)
+            if (graphic)
             {
-                continue;
+                found.emplace_back(item, *graphic);
             }
+        }
+        std::lock_guard lock{_mu};
+        for (auto const& [item, g] : found)
+        {
+            int const n = static_cast<int>(item.get("layer").get<double>());
+            auto const* graphic = &g;
             auto& l = at(n);
             l.state = "ready"; // loaded into the page by restore()
             l.graphicId = graphic->id;
@@ -386,6 +416,25 @@ namespace mbs::ograf
             auto const graphic = _library.findInPackage(before.package, before.graphicId);
             if (!graphic)
             {
+                // Its package is gone (it should not be: a layer keeps its package). Say so instead
+                // of showing a layer as ready that the new page does not have.
+                {
+                    std::lock_guard lock{_mu};
+                    auto& l = at(before.number);
+                    if (l.instanceId == before.instanceId)
+                    {
+                        l.state = "error";
+                        l.pending = 0;
+                        l.step.reset();
+                        l.error = "restore failed: graphic '" + before.graphicId + "' is no longer in the library";
+                    }
+                }
+                log::warn("ograf_layer_restored", {{"layer", before.number}, {"graphic", before.graphicId}, {"state", "error"}, {"error", "graphic missing"}});
+                if (_onRestore)
+                {
+                    _onRestore(false);
+                }
+                changed();
                 continue;
             }
             auto const module = "https://ograf.local/packages/" + graphic->package + "/" + graphic->mainPath();

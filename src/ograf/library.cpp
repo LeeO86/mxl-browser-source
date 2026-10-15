@@ -153,7 +153,7 @@ namespace mbs::ograf
         return writeFileAtomic(_dir + "/index.json", picojson::value(doc).serialize(true));
     }
 
-    UploadResult Library::addZip(std::string const& zipPath, std::set<std::string> const& inUse)
+    UploadResult Library::addZip(std::string const& zipPath, InUse const& inUse)
     {
         auto const package = randomId();
         auto const tmp = fs::path(_dir) / "tmp" / package;
@@ -305,7 +305,7 @@ namespace mbs::ograf
         return std::nullopt;
     }
 
-    bool Library::remove(std::string const& id, std::set<std::string> const& inUse)
+    bool Library::remove(std::string const& id, InUse const& inUse)
     {
         std::lock_guard lock{_mu};
         bool found = false;
@@ -326,17 +326,18 @@ namespace mbs::ograf
         return found;
     }
 
-    void Library::collect(std::set<std::string> const& inUse)
+    void Library::collect(InUse const& inUse)
     {
         std::lock_guard lock{_mu};
         collectLocked(inUse);
         saveLocked();
     }
 
-    void Library::collectLocked(std::set<std::string> const& inUse)
+    void Library::collectLocked(InUse const& inUse)
     {
-        std::erase_if(_graphics, [&](Graphic const& g) { return !g.listed && !inUse.contains(g.package); });
-        std::set<std::string> keep = inUse;
+        auto const used = inUse ? inUse() : std::set<std::string>{};
+        std::erase_if(_graphics, [&](Graphic const& g) { return !g.listed && !used.contains(g.package); });
+        std::set<std::string> keep = used;
         for (auto const& g : _graphics)
         {
             keep.insert(g.package);
