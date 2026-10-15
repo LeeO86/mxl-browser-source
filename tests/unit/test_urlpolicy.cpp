@@ -137,3 +137,14 @@ TEST_CASE("a service worker's requests: refused while service workers are off, e
     // The page's own requests do not depend on the setting.
     CHECK(off.check("https://graphics.media.int/data.json", false).allowed);
 }
+
+TEST_CASE("same origin: scheme, host and port")
+{
+    using mbs::ops::sameOrigin;
+    CHECK(sameOrigin("http://10.0.0.5:18471/", "http://10.0.0.5:18471/nav-probe?x"));
+    CHECK(sameOrigin("https://Graphics.media.int/a", "https://graphics.media.int:443/b"));
+    CHECK_FALSE(sameOrigin("http://10.0.0.5:18471/", "https://templates.local/blank.html"));
+    CHECK_FALSE(sameOrigin("http://10.0.0.5:18471/", "http://10.0.0.5:18472/"));
+    CHECK_FALSE(sameOrigin("http://a.example/", "https://a.example/"));
+    CHECK_FALSE(sameOrigin("about:blank", "about:blank")); // no authority: a navigation away from it stops workers
+}

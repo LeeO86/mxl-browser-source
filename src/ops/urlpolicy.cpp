@@ -210,6 +210,13 @@ namespace mbs::ops
         return false;
     }
 
+    bool sameOrigin(std::string_view a, std::string_view b)
+    {
+        auto const x = parseUrl(a);
+        auto const y = parseUrl(b);
+        return x && y && x->scheme == y->scheme && x->host == y->host && x->port == y->port;
+    }
+
     UrlVerdict UrlPolicy::checkServiceWorker(std::string_view url) const
     {
         if (!_settings.serviceWorkers)

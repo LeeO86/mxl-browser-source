@@ -3,9 +3,10 @@
 # The integration tests of SPEC §17 against an image, in software mode on a tmpfs MXL root (CI):
 # interaction and IME, dialogs/popups/downloads/permissions, templates/crash/hang, service workers,
 # IS-05 enable and restart, then the lifecycle of guideline G14: registered → SIGTERM → exit 143,
-# node gone from the Query API, own domain removed, and service workers on in a second container. A registry runs next to it (the platform's image with
-# docker/registry.json). latency_test.py stays a lab test (its 150 ms budget needs the lab host's
-# clock and CPU). The container logs go to $IT_ARTIFACTS (default ./it-artifacts).
+# node gone from the Query API, own domain removed, and service workers off and on in a second
+# container. A registry runs next to it (the platform's image with docker/registry.json).
+# latency_test.py stays a lab test (its 150 ms budget needs the lab host's clock and CPU). The
+# container logs go to $IT_ARTIFACTS (default ./it-artifacts).
 #
 #   tests/integration/ci.sh <image>
 set -euo pipefail
@@ -71,17 +72,25 @@ status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3211/x-nmos/q
 [[ "$status" == 404 ]] || { echo "SIGTERM: node still in the registry ($status)" >&2; exit 1; }
 echo "lifecycle: registered, SIGTERM -> exit 143, node removed from the registry, own domain removed"
 
-# Service workers on (SPEC §14.3): their requests follow the URL policy. No registry (the page's
-# origin is the host address, which would be the registry's); the test serves the page on 18471.
-docker run -d --name mbs-it-sw --network host --shm-size 1g \
-    --tmpfs /Volumes/mxl:rw,size=1g,mode=1777 \
-    -e BROWSER_RENDER=software -e WEB_PORT=8170 -e NMOS_PORT=3322 -e NMOS_HOST_ADDRESS="$HOST_IP" -e NMOS_SEED=it-sw \
-    -e MXL_OUTPUT_DOMAIN_DIR=/Volumes/mxl/browser-source-it-sw -e LOG_FORMAT=text \
-    -e BROWSER_SERVICE_WORKERS=true -e BROWSER_URL_ALLOW="$HOST_IP" \
-    -e BROWSER_CHROMIUM_FLAGS_APPEND="--unsafely-treat-insecure-origin-as-secure=http://$HOST_IP:18471" "$IMAGE" >/dev/null
-for _ in $(seq 1 60); do
-    curl -fs -o /dev/null http://127.0.0.1:8170/livez && break
-    sleep 1
-done
+# Service workers off and on (SPEC §14.3) in a second container, with the page this test serves
+# on 18471 treated as secure. No registry (the page's origin is the host address, which would be
+# the registry's).
+sw_container() {
+    docker rm -f mbs-it-sw >/dev/null 2>&1 || true
+    docker run -d --name mbs-it-sw --network host --shm-size 1g \
+        --tmpfs /Volumes/mxl:rw,size=1g,mode=1777 \
+        -e BROWSER_RENDER=software -e WEB_PORT=8170 -e NMOS_PORT=3322 -e NMOS_HOST_ADDRESS="$HOST_IP" -e NMOS_SEED=it-sw \
+        -e MXL_OUTPUT_DOMAIN_DIR=/Volumes/mxl/browser-source-it-sw -e LOG_FORMAT=text \
+        -e BROWSER_SERVICE_WORKERS="$1" -e BROWSER_URL_ALLOW="$HOST_IP" \
+        -e BROWSER_CHROMIUM_FLAGS_APPEND="--unsafely-treat-insecure-origin-as-secure=http://$HOST_IP:18471" "$IMAGE" >/dev/null
+    for _ in $(seq 1 60); do
+        curl -fs -o /dev/null http://127.0.0.1:8170/livez && break
+        sleep 1
+    done
+}
+sw_container false
+python3 sw_test.py 127.0.0.1:8170 off-served "$HOST_IP" 18471
+docker logs mbs-it-sw >"$ART/mbs-it-sw-off.log" 2>&1 || true
+sw_container true
 python3 sw_test.py 127.0.0.1:8170 on "$HOST_IP" 18471
 echo "integration tests passed"

@@ -58,6 +58,9 @@ namespace mbs::ops
         UrlPolicySettings _settings;
     };
 
+    /// Same scheme, host and port (false when either has no authority).
+    bool sameOrigin(std::string_view a, std::string_view b);
+
     /// Simple glob: '*' matches any run of characters (case-insensitive).
     bool globMatch(std::string_view pattern, std::string_view text);
     /// `cidr` as a.b.c.d/n or an IPv6 prefix; a bare address is a /32 or /128.

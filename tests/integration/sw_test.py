@@ -8,6 +8,12 @@ Standard library only.
         A container with BROWSER_SERVICE_WORKERS=false (default): templates.local/service-worker.html,
         a secure context, sees no navigator.serviceWorker, nor does its iframe.
 
+    sw_test.py host:port off-served <host_ip> <server_port>
+        A container with BROWSER_SERVICE_WORKERS=false and the settings of `on` below. The page this
+        script serves (a secure context by the flag) sees no navigator.serviceWorker; its
+        cross-origin iframe (templates.local, its own renderer) posts that it sees none either; a
+        shared worker's fetch of an allowed URL is refused and counted (reason service_worker).
+
     sw_test.py host:port on <host_ip> <server_port>
         A container with BROWSER_SERVICE_WORKERS=true, BROWSER_URL_ALLOW=<host_ip>, no registry and
         --unsafely-treat-insecure-origin-as-secure=http://<host_ip>:<server_port>. This script serves
@@ -55,14 +61,32 @@ self.addEventListener("fetch", (e) => {
 """
 
 
-def serve(port, worker):
+OFF_PAGE = """<!doctype html><title>sw-off</title><body><script>
+const post = (o) => { if (window.mxlBrowserSource) window.mxlBrowserSource.post(o); };
+post({top: {serviceWorker: "serviceWorker" in navigator, secure: window.isSecureContext}});
+const frame = document.createElement("iframe");
+frame.src = "https://templates.local/service-worker.html";
+document.body.appendChild(frame);
+const shared = new SharedWorker("/shared.js");
+shared.port.onmessage = (e) => post({shared: e.data});
+shared.port.start();
+</script>"""
+
+SHARED = """onconnect = async (e) => {
+  let r; try { await fetch("/probe?t=allowed&from=shared", {mode: "no-cors"}); r = "through"; } catch (err) { r = "blocked"; }
+  e.ports[0].postMessage(r);
+};"""
+
+
+def serve(port, worker, page=PAGE):
     hits = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
             hits.append(self.path)
-            body, kind = {"/": (PAGE, "text/html"), "/sw.js": (worker, "text/javascript")}.get(path, ("// ok", "text/javascript"))
+            routes = {"/": (page, "text/html"), "/sw.js": (worker, "text/javascript"), "/shared.js": (SHARED, "text/javascript")}
+            body, kind = routes.get(path, ("// ok", "text/javascript"))
             data = body.encode()
             self.send_response(200)
             self.send_header("Content-Type", kind)
@@ -97,6 +121,25 @@ def off():
     print("service workers off: no navigator.serviceWorker in a secure page or its iframe")
 
 
+def off_served(host_ip, server_port):
+    origin = f"http://{host_ip}:{server_port}"
+    hits = serve(server_port, "", OFF_PAGE)
+    assert wait_state(("loaded",), 30) is not None, "the start page does not load"
+    before = metric('navigation_blocked_total{reason="service_worker"}')
+    sock = ws_connect(HOST, int(PORT), "/api/v1/events")
+    call("POST", "/api/v1/source/navigate", {"url": origin + "/"})
+    got = posts(sock, 20, lambda o: {"top", "serviceWorkers", "shared"} <= o.keys())
+    assert got.get("top") == {"serviceWorker": False, "secure": True}, got
+    # templates.local in an iframe of another site: its own renderer, its own context.
+    assert got.get("serviceWorkers") == {"serviceWorker": False, "iframe": False, "secure": True}, got
+    assert got.get("shared") == "blocked", got
+    assert not [h for h in hits if "from=shared" in h], hits
+    after = metric('navigation_blocked_total{reason="service_worker"}')
+    assert after >= before + 1, (before, after)
+    print("service workers off: none in a secure page or its cross-origin iframe; a shared worker's fetch "
+          f"refused and counted (service_worker +{after - before:.0f})")
+
+
 def on(host_ip, server_port):
     origin = f"http://{host_ip}:{server_port}"
     hits = serve(server_port, WORKER % {"origin": origin, "loopback": f"http://127.0.0.1:{server_port}", "own": f"http://{host_ip}:{PORT}"})
@@ -123,6 +166,8 @@ def on(host_ip, server_port):
 if __name__ == "__main__":
     if sys.argv[2] == "off":
         off()
+    elif sys.argv[2] == "off-served":
+        off_served(sys.argv[3], int(sys.argv[4]))
     else:
         on(sys.argv[3], int(sys.argv[4]))
     print("OK")

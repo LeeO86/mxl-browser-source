@@ -472,10 +472,17 @@ namespace mbs::app
             }
             // Service workers off: the ones registered while they were on would still answer their
             // pages' requests (from their caches; their own requests are refused, SPEC §14.3).
-            if (!_cfg.serviceWorkers && fs::exists(_cachePath + "/Default/Service Worker", ec))
+            if (!_cfg.serviceWorkers)
             {
-                fs::remove_all(_cachePath + "/Default/Service Worker", ec);
-                log::info("service_workers_removed", {{"ok", !ec}});
+                if (auto const removed = mxlio::removeServiceWorkerRegistrations(_cachePath); !removed.empty())
+                {
+                    std::string parts;
+                    for (auto const& part : removed)
+                    {
+                        parts += (parts.empty() ? "" : ",") + part;
+                    }
+                    log::info("service_workers_removed", {{"parts", parts}});
+                }
             }
         }
         else

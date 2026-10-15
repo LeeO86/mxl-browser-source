@@ -923,6 +923,16 @@ namespace mbs::cef
                 impl->observer.onNavigationBlocked(url, verdict.reason);
                 return true;
             }
+            // Service workers on: a worker that outlives its page after a navigation to another
+            // site keeps running in the old renderer, and CEF finds no request context handler for
+            // its requests there any more (lab, CEF 144): they went out unchecked. Leaving an
+            // origin stops all workers (the domain must be enabled first; lab: the worker stopped
+            // at the navigation); one of the new origin starts again at its next event.
+            if (gSettings.serviceWorkers && frame->IsMain() && !ops::sameOrigin(frame->GetURL().ToString(), url))
+            {
+                browser->GetHost()->ExecuteDevToolsMethod(impl->nextDevToolsId.fetch_add(1), "ServiceWorker.enable", nullptr);
+                browser->GetHost()->ExecuteDevToolsMethod(impl->nextDevToolsId.fetch_add(1), "ServiceWorker.stopAllWorkers", nullptr);
+            }
             return false;
         }
 
