@@ -619,7 +619,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_DEVTOOLS_PORT` | 9222 | yes | internal DevTools port (loopback) |
 | `BROWSER_API_TOKEN` | empty | yes | optional bearer token (secret) |
 | `BROWSER_PROFILE` | `ephemeral` | yes | `ephemeral` (cache in `/tmp`, cleared at start) or `persistent` (`<state>/profile`, cookies and logins survive); in both, Chromium's histogram file lives in `/dev/shm` (§6) |
-| `BROWSER_WEBGPU` | `false` | yes | `true` offers WebGPU (Dawn on Vulkan) to pages; `false` adds `disable-features=WebGPUService,WebGPUBlobCache`, so `navigator.gpu.requestAdapter()` answers null without starting Dawn (the image has no Vulkan driver; a Dawn probe crashed a helper in the M4 soak) |
+| `BROWSER_WEBGPU` | `false` | yes | `true` offers WebGPU (Dawn on Vulkan) to pages; `false` adds `disable-features=WebGPUService,WebGPUBlobCache`, so `navigator.gpu.requestAdapter()` answers null without starting Dawn (the image has no Vulkan driver; a Dawn probe crashed a helper in the M4 soak). It does not stop every probe: the 8 h soak had one "stack smashing detected" in a short-lived helper at the first load of a WebGPU-probing graphic (harmless there, not fixed) |
 | `BROWSER_WEBAUTHN` | `false` | yes | `true` offers WebAuthn (passkeys) to pages; `false` hides it so sign-in pages fall back to other methods (§4.5) |
 | `BROWSER_TEMPLATES_DIR` | `<state>/templates` | yes | §4.2 |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | yes | OGraf library (§4.6) |

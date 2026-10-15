@@ -101,8 +101,10 @@ fire-and-forget.
 
 - A thrown exception or a rejected promise comes back as an error, and the API answers 550 (OGraf's code for
   an error inside the graphic).
-- **Timeout:** `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (default 10000). Then the API answers 504. The layer stays
-  in its last known state, with `pending` set, until the promise settles.
+- **Timeout:** `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (default 10000). Then the API answers 504 and stops waiting:
+  `pending` is cleared and the layer's `error` names the timeout. After an action the layer keeps its last
+  known state; after a `load` it is in state `error`. A promise that settles later is not applied. A second
+  `load` on the same layer rejects a load still running there at once (the function answers that call 409).
 - **Order:** the spec says a graphic must take an action at any time, even while an earlier promise is open.
   So the renderer does not serialise actions, with one exception: actions that arrive while `load()` is still
   running wait for it (the spec's MUST). `clear` during a load waits for the load, then calls `dispose()`.
@@ -273,7 +275,7 @@ folded into 500:
 | Code | When | Why not 500 |
 | --- | --- | --- |
 | **409** | no renderer page: mode `page`, or the renderer is loading or recovering after a crash or hang | nothing failed; the action is refused in this state and works once the mode is `ograf` and the page is up. A controller can show "renderer not ready" and retry |
-| **504** | the graphic's promise did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (10 s) | the graphic is not known to have failed: the layer keeps its last state with `pending` set, and the action may still complete |
+| **504** | the graphic's promise did not settle within `BROWSER_OGRAF_ACTION_TIMEOUT_MS` (10 s) | the graphic is not known to have failed (the action may still complete in the page): after an action the layer keeps its last state with `error` set; a timed-out `load` leaves the layer in state `error`. `pending` is cleared in both cases |
 
 Both are `ErrorResponse` objects (RFC 7807) with a `detail`. A strict controller that accepts only the spec's
 codes treats them as unexpected: SuperFlyTV's default controller logs the answer and throws, the action shows
@@ -406,12 +408,12 @@ Prefix `mxl_browser_source_` (so `mxl_browser_source_ograf_actions_total`, …):
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `ograf_actions_total` | counter | `action` (`load`, `play`, `stop`, `update`, `custom`, `clear`), `result` (`ok`, `error`, `timeout`) |
+| `ograf_actions_total` | counter | `action` (`load`, `play`, `stop`, `update`, `custom`, `clear`), `result` (`ok`, `error`, `timeout`, `unavailable`: no renderer page, answered 409) |
 | `ograf_action_seconds` | histogram | `action` (until the graphic's promise settles) |
 | `ograf_layers` | gauge | `state` |
 | `ograf_graphics` | gauge | – (library size) |
 | `ograf_uploads_total` | counter | `result` (`ok`, `rejected`) |
-| `ograf_restores_total` | counter | `result` |
+| `ograf_restores_total` | counter | `result` (`ok`, `error`; a layer whose graphic is no longer in the library counts as `error` and is shown in state `error`) |
 
 The Grafana dashboard gets one row with these metrics.
 

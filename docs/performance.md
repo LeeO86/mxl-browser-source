@@ -245,7 +245,7 @@ Raw data: `~/mxl-lab/ograf/m5/mem-old/`, `mem-new/` (`memory.log`, `soak.csv`).
 | Repeated grains | 198 148 (13.7 %): 194 197 BeginFrames without a paint, plus the late paints, plus 28 `hold` at the start |
 | Frame ready (BeginFrame → converted) | mean 13.5 ms |
 | "stack smashing detected" | **1**, at 18:37 (minute 3), 3 s after `renderer-test` was loaded the first time: Dawn's Vulkan probe ("vkCreateInstance: Found no drivers") in a short-lived helper. No grain was missed and no process that matters was lost. There were none in the 7 h 57 min after it, although `renderer-test` was loaded about 3 500 more times. `BROWSER_WEBGPU=false` does not stop this one probe (see the M5 notes above). It is harmless here and noted as a known log line. |
-| Other log lines | `dbus` and `vkCreateInstance() failed: -9` at start (known); an SSL handshake error every 10 min (a page's request to an outside host through the lab's TLS inspection, `net_error -202`) |
+| Other log lines | `dbus` and `vkCreateInstance() failed: -9` at start (known); an SSL handshake error every 10 min (`net_error -202` through the lab's TLS inspection): Chromium's own background connections, not a page or graphic, as in the 2.5 h run below; `navigation_blocked_total{reason="ograf_local"}` counts every request a page or graphic makes outside the library |
 
 **Over time** (mean per hour of the per-minute samples; "distinct" is the number of different graphics on the 8 layers, sampled every second from the `ograf_load` log lines):
 

@@ -11,7 +11,7 @@ services:
     tmpfs: [/tmp]
     ulimits:
       nofile: 65536
-    cap_add: [SYS_NICE] # SCHED_FIFO for the tick thread (optional)
+      rtprio: 10 # tick and converter threads SCHED_FIFO (SPEC §2.2); cap_add SYS_NICE alone does not give it to uid 1000
     volumes:
       - /Volumes/mxl:/Volumes/mxl
       - browser-config:/config
