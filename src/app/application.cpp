@@ -477,6 +477,27 @@ namespace mbs::app
             fs::remove_all(_cachePath, ec);
             fs::create_directories(_cachePath, ec);
         }
+        // Chromium's persistent histograms (<cache>/BrowserMetrics/*.pma) are a shared file mapping
+        // that every thread recording a histogram writes, among them the capture thread that calls
+        // OnAudioStreamPacket. On a journaling disk file system the first write to a page that
+        // writeback cleaned waits for the journal commit: with a busy disk the page's audio stalled
+        // for 100-350 ms (docs/performance.md, M7). Neither --disable-features=PersistentHistograms
+        // nor its storage parameter moves it in CEF 144, so the directory is a link into /dev/shm
+        // when the cache is not on a tmpfs already (SPEC §6).
+        auto const metrics = _cachePath + "/BrowserMetrics";
+        if (!mxlio::isTmpfs(_cachePath) && fs::is_directory("/dev/shm", ec) && mxlio::isTmpfs("/dev/shm"))
+        {
+            auto const target = std::string("/dev/shm/mxl-browser-source-metrics");
+            fs::remove_all(target, ec);
+            fs::create_directories(target, ec);
+            fs::remove_all(metrics, ec);
+            fs::create_directory_symlink(target, metrics, ec);
+            log::info("browser_metrics_on_tmpfs", {{"path", target}, {"ok", !ec}});
+        }
+        else if (fs::is_symlink(metrics, ec))
+        {
+            fs::remove(metrics, ec); // a link from an earlier start: Chromium makes the directory
+        }
     }
 
     void Application::startCef()
