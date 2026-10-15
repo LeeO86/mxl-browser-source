@@ -23,6 +23,7 @@
 #include "engine/framestore.hpp"
 #include "engine/tick.hpp"
 #include "util/metrics.hpp"
+#include "util/tracering.hpp"
 
 namespace mbs::engine
 {
@@ -127,7 +128,7 @@ namespace mbs::engine
     /// One event of the audio trace (docs/api.md, /api/v1/debug/audio-trace). `ns` is TAI.
     enum class AudioTraceKind : std::uint8_t
     {
-        Packet, // OnAudioStreamPacket; a: pts (ms, CLOCK_MONOTONIC), b: frames, c: FIFO frames after it, d: silence put before it (gap fill), e: arrival (CLOCK_MONOTONIC ns)
+        Packet, // OnAudioStreamPacket; a: pts (ms, wall time as CEF 144 gives it: TAI − pts ≈ 37 s + latency), b: frames, c: FIFO frames after it, d: silence put before it (gap fill), e: arrival (CLOCK_MONOTONIC ns)
         Tick,   // the tick wrote a grain; a: FIFO frames before it, b: target frames, c: underrun frames (total), d: frames dropped as late (total), e: FIFO frames after it
     };
 
@@ -154,11 +155,24 @@ namespace mbs::engine
         std::uint64_t audioGaps = 0;         // upstream losses found in the packet times
         std::uint64_t audioGapFrames = 0;    // silence put in their place
         std::uint64_t audioGapsUnfilled = 0; // jumps too long to fill (left to the FIFO)
+        std::uint64_t audioFifoOverflows = 0;      // packets that did not fit into the FIFO (cannot happen at its size)
+        std::uint64_t audioFifoOverflowFrames = 0; // frames dropped for them
+        std::size_t audioFifoFrames = 0;           // FIFO capacity
         std::vector<double> audioPeakDbfs; // per flow channel, last grain
         bool internalFrameClock = false;
         FrameClockStats frameClock;
         std::uint32_t videoDelayGrains = 0; // now (the base plus what the adaptive audio target added)
     };
+
+    /// BROWSER_AV_OFFSET_MS is at most 500 ms (config), in frames: it adds to the FIFO target.
+    inline constexpr std::uint32_t kMaxAvOffsetFrames = 500 * 48;
+
+    /// The video delay for what the adaptive audio target adds: whole grains of the nominal grain
+    /// length `grainFrames` (48000·den/num), rounded.
+    std::uint32_t videoDelayExtraGrains(double extraFrames, double grainFrames);
+
+    /// The page audio FIFO's capacity: room for the largest target up to the overrun cut.
+    std::size_t audioFifoFrames(EngineSettings const& settings);
 
     class Engine final : TickActions
     {
@@ -317,6 +331,9 @@ namespace mbs::engine
         std::atomic<std::uint64_t> _audioGaps{0};
         std::atomic<std::uint64_t> _audioGapFrames{0};
         std::atomic<std::uint64_t> _audioGapsUnfilled{0};
+        std::atomic<bool> _audioLost{false}; // audio thread → tick: a pts jump too long to fill
+        std::atomic<std::uint64_t> _audioOverflows{0};
+        std::atomic<std::uint64_t> _audioOverflowFrames{0};
 
         // Internal frame clock.
         std::unique_ptr<FrameClock> _frameClock;
@@ -338,19 +355,12 @@ namespace mbs::engine
         std::uint64_t _previewServed = 0; // the request ticket the newest preview answered
         std::vector<std::uint8_t> _previewScratch;
 
-        // Frame-loop trace: a ring of the newest events, one short lock per event.
+        // Frame-loop and audio traces (packets about 100/s, and grains): lock-free rings, so a
+        // reader never holds up the tick or CEF's threads.
         static constexpr std::size_t kTraceEvents = 12288;
-        mutable std::mutex _traceMutex;
-        std::vector<TraceEvent> _trace;
-        std::size_t _traceNext = 0;
-        bool _traceFull = false;
-
-        // Audio trace: packets (about 100/s) and grains, one short lock per event.
+        util::TraceRing<TraceEvent> _trace{kTraceEvents};
         static constexpr std::size_t kAudioTraceEvents = 16384;
-        mutable std::mutex _audioTraceMutex;
-        std::vector<AudioTraceEvent> _audioTrace;
-        std::size_t _audioTraceNext = 0;
-        bool _audioTraceFull = false;
+        util::TraceRing<AudioTraceEvent> _audioTrace{kAudioTraceEvents};
 
         mutable std::mutex _statsMutex;
         EngineStats _stats;

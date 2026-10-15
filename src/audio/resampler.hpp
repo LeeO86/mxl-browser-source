@@ -18,6 +18,13 @@
 // next stall of that size is absorbed. After kHoldSeconds without an underrun the target falls
 // back towards the base at kDecayMsPerSecond, which the controller follows (1000 ppm). The
 // engine delays the video by the same amount, so lip sync holds.
+//
+// The raised target stands for audio that is late. When it turns out to be lost instead (the
+// debt expires after kDebtNs, or the engine finds a pts jump too long to fill) and the fill is
+// clearly below the target, the target drops to the fill the audio resumed at (not below the base), so the video delay follows the real
+// latency instead of waiting a minute for the controller. While no stream plays (or a started one
+// has no audio yet) nothing needs the extra latency: kHoldSeconds after the last underrun the
+// target goes back to the base, and the video delay with it.
 #pragma once
 
 #include <cstddef>
@@ -42,6 +49,7 @@ namespace mbs::audio
         double fillSeconds = 0;           // FIFO fill (plus the resampler's input), smoothed over about 1 s
         double targetSeconds = 0;         // the fill target now (base plus what underruns added)
         std::uint64_t targetRaises = 0;   // underrun ticks that raised the target
+        std::uint64_t targetLowered = 0;  // the late audio was lost: the target fell to the fill
     };
 
     class Resampler
@@ -55,6 +63,7 @@ namespace mbs::audio
         static constexpr std::size_t kPacketFrames = 480;       // CEF delivers 10 ms packets (SPEC §6)
         static constexpr double kHoldSeconds = 10.0;            // adaptive target: no decay this long after an underrun
         static constexpr double kDecayMsPerSecond = 1.0;        // then the target falls this fast (1000 ppm)
+        static constexpr double kOverrunFactor = 3.0;           // above this multiple of the target the FIFO is cut back
 
         /// `maxTargetFrames` > `targetFrames` makes the target adaptive (above); 0 or less keeps it fixed.
         Resampler(std::size_t channels, std::size_t targetFrames, std::size_t maxTargetFrames = 0);
@@ -72,6 +81,15 @@ namespace mbs::audio
         /// A stream starts (or starts again): the next tick that finds audio aligns the fill to
         /// the target.
         void start();
+
+        /// No stream plays (and none is drained): the adaptive target goes back to the base once
+        /// kHoldSeconds passed since the last underrun.
+        void idle(std::uint64_t nowNs);
+
+        /// The audio the silence stood in for is lost, not late (a pts jump too long to fill):
+        /// the debt is forgiven and, when the fill is clearly below the target (more than a tick
+        /// and a packet), the target falls to the fill now (not below the base).
+        void lost(Fifo const& fifo);
 
         /// Starts over: drops what the FIFO holds and starts.
         void reset(Fifo& fifo);
@@ -92,6 +110,7 @@ namespace mbs::audio
         void dropOldest(Fifo& fifo, std::size_t frames);
         void align(Fifo& fifo);
         void raise(std::size_t silenceFrames, std::uint64_t nowNs);
+        void forgive(std::size_t fillFrames);
         std::size_t resample(Fifo& fifo, float* out, std::size_t frames, double ratio);
 
         std::size_t _channels;
@@ -105,6 +124,8 @@ namespace mbs::audio
         bool _starting = true;   // waiting for the first audio of a stream
         std::size_t _lead = 0;   // frames of silence before the FIFO's audio (a start below the target)
         bool _waiting = false;   // ran dry: silence until the FIFO holds one grain plus a packet
+        bool _lostUntilResume = false; // lost() while waiting: the rest of the wait raises nothing
+        std::size_t _tickFrames = 960;  // frames per tick (the newest produce())
         std::size_t _debt = 0;   // silence played for audio that may still arrive
         std::uint64_t _debtSinceNs = 0;
         double _integral = 0;

@@ -340,6 +340,14 @@ namespace
             heldUntil = now + seconds;
             run(seconds + 0.5);
         }
+        // Like a stall, but what the source made meanwhile is never delivered (lost, not late).
+        void lose(double seconds)
+        {
+            heldUntil = now + 1000;
+            run(seconds);
+            source.clock = std::floor(now * (1 + source.drift) / 0.01) * 0.01;
+            heldUntil = -1;
+        }
     };
 }
 
@@ -413,4 +421,64 @@ TEST_CASE("adaptive target: a new base (BROWSER_AV_OFFSET_MS) keeps what underru
     r.resampler.setTarget(r.fifo, 2880 + 960);
     CHECK(r.resampler.extraFrames() == doctest::Approx(extra));
     CHECK(r.resampler.target() == static_cast<std::size_t>(2880 + 960 + extra));
+}
+
+TEST_CASE("adaptive target: audio that never comes (the debt expires) lowers the target to the fill at once")
+{
+    StallRun r(14400);
+    r.run(5);
+    r.lose(0.25);
+    r.run(0.5);
+    CHECK(r.resampler.stats().underruns == 1);
+    CHECK(r.resampler.extraFrames() > 6000); // raised for audio that may still come
+    r.run(2.0);                              // it does not: the debt expires
+    CHECK(r.resampler.stats().targetLowered == 1);
+    CHECK(r.resampler.target() == 2880); // the fill resumed below the base
+    CHECK(r.resampler.extraFrames() == 0);
+    r.run(60);
+    CHECK(std::fabs(r.resampler.stats().fillSeconds - 0.06) < 0.01);
+    CHECK(r.resampler.stats().underruns == 1);
+}
+
+TEST_CASE("adaptive target: a loss the engine reports (a pts jump too long to fill) lowers it at once, and its silence raises nothing")
+{
+    StallRun r(14400);
+    r.run(5);
+    r.heldUntil = r.now + 1000;
+    r.run(0.1); // dry for a while: the target rises with the silence
+    REQUIRE(r.resampler.stats().underruns == 1);
+    REQUIRE(r.resampler.extraFrames() > 0);
+    r.resampler.lost(r.fifo); // the engine saw the jump
+    CHECK(r.resampler.extraFrames() == 0);
+    CHECK(r.resampler.stats().targetLowered == 1);
+    r.run(0.2);
+    CHECK(r.resampler.extraFrames() == 0); // the rest of the wait did not raise it again
+    r.lose(0); // the packets resume after the jump
+    r.run(5);
+    CHECK(r.resampler.target() == 2880);
+    CHECK(r.resampler.stats().underruns == 1);
+}
+
+TEST_CASE("adaptive target: while no stream plays it goes back to the base after the hold")
+{
+    StallRun r(14400);
+    r.run(5);
+    r.stall(0.2);
+    auto const raised = r.resampler.target();
+    REQUIRE(raised > 2880);
+    // The stream stops: no produce() any more, the engine calls idle() every grain.
+    for (int i = 0; i < 400; ++i) // 8 s: still within the hold
+    {
+        r.now += 0.02;
+        r.resampler.idle(Source::ns(r.now));
+    }
+    CHECK(r.resampler.target() == raised);
+    for (int i = 0; i < 150; ++i) // past 10 s since the underrun
+    {
+        r.now += 0.02;
+        r.resampler.idle(Source::ns(r.now));
+    }
+    CHECK(r.resampler.target() == 2880);
+    CHECK(r.resampler.extraFrames() == 0);
+    CHECK(r.resampler.stats().targetSeconds == doctest::Approx(0.06));
 }

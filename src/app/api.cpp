@@ -308,6 +308,9 @@ namespace mbs::app
             m.set("audio_buffer_seconds", {}, s.audio.fillSeconds);
             m.set("audio_target_seconds", {}, s.audio.targetSeconds);
             m.setCounter("audio_target_raises_total", {}, static_cast<double>(s.audio.targetRaises));
+            m.setCounter("audio_target_lowered_total", {}, static_cast<double>(s.audio.targetLowered));
+            m.setCounter("audio_fifo_overflows_total", {}, static_cast<double>(s.audioFifoOverflows));
+            m.setCounter("audio_fifo_overflow_seconds_total", {}, static_cast<double>(s.audioFifoOverflowFrames) / 48000.0);
             for (std::size_t c = 0; c < s.audioPeakDbfs.size(); ++c)
             {
                 m.set("audio_peak_dbfs", {{"channel", std::to_string(c + 1)}}, s.audioPeakDbfs[c]);
@@ -677,7 +680,8 @@ namespace mbs::app
             reply(res, 200, statusJson());
             return;
         }
-        if (path == "/api/v1/debug/frame-trace" && method == "GET")
+        // The debug routes are for diagnosis: only with BROWSER_DEVTOOLS=true (404 otherwise).
+        if (path == "/api/v1/debug/frame-trace" && method == "GET" && _cfg.devtools)
         {
             // The frame loop's newest events (docs/api.md): [TAI ns, kind, a, b] each.
             static constexpr char const* kKinds[] = {"tick", "commit", "bf_posted", "bf_sent", "paint", "convert_start", "convert_end", "anchor"};
@@ -710,7 +714,7 @@ namespace mbs::app
             reply(res, 202, R"({"held_ms":)" + std::to_string(ms) + "}");
             return;
         }
-        if (path == "/api/v1/debug/audio-trace" && method == "GET")
+        if (path == "/api/v1/debug/audio-trace" && method == "GET" && _cfg.devtools)
         {
             // The audio path's newest events (docs/api.md): [TAI ns, kind, a, b, c, d, e] each.
             auto const events = _engine->audioTrace();

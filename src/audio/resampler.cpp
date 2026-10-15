@@ -19,8 +19,6 @@ namespace mbs::audio
         constexpr double kKp = 0.04;
         constexpr double kKi = kKp * kKp / 4;
         constexpr double kSmoothSeconds = 1.0;
-        // Above this multiple of the target the FIFO is cut back instead of steered.
-        constexpr double kOverrunFactor = 3.0;
         // The resampler's look-ahead (frames it wants beyond what it produces).
         constexpr std::size_t kLookAhead = 64;
     }
@@ -50,6 +48,7 @@ namespace mbs::audio
         _starting = true;
         _lead = 0;
         _waiting = false;
+        _lostUntilResume = false;
         _debt = 0;
         _integral = 0;
         _smoothed = -1;
@@ -114,6 +113,42 @@ namespace mbs::audio
         _stats.targetSeconds = _target / kSampleRate;
     }
 
+    void Resampler::forgive(std::size_t fillFrames)
+    {
+        _debt = 0;
+        // Only a fill clearly below the target means audio was lost: within a tick plus a packet
+        // the fill is just where the next packet is.
+        if (static_cast<double>(fillFrames + _tickFrames + kPacketFrames + kLookAhead) >= _target)
+        {
+            return;
+        }
+        auto const lowered = std::max(_base, static_cast<double>(fillFrames));
+        if (lowered < _target)
+        {
+            _target = lowered;
+            ++_stats.targetLowered;
+            _stats.targetSeconds = _target / kSampleRate;
+        }
+    }
+
+    void Resampler::idle(std::uint64_t nowNs)
+    {
+        if (_target > _base && nowNs > _lastUnderrunNs + static_cast<std::uint64_t>(kHoldSeconds * 1e9))
+        {
+            _target = _base;
+            _stats.targetSeconds = _target / kSampleRate;
+        }
+    }
+
+    void Resampler::lost(Fifo const& fifo)
+    {
+        if (_debt > 0 || _target > _base)
+        {
+            forgive(fill(fifo));
+        }
+        _lostUntilResume = _waiting;
+    }
+
     std::size_t Resampler::resample(Fifo& fifo, float* out, std::size_t frames, double ratio)
     {
         std::size_t produced = 0;
@@ -162,6 +197,7 @@ namespace mbs::audio
     void Resampler::produce(Fifo& fifo, float* out, std::size_t frames, std::uint64_t nowNs)
     {
         _stats.samples += frames;
+        _tickFrames = frames;
         auto const silence = [&](std::size_t from) { std::fill(out + from * _channels, out + frames * _channels, 0.f); };
 
         if (_starting)
@@ -170,6 +206,7 @@ namespace mbs::audio
             {
                 _stats.fillSeconds = 0;
                 silence(0); // no audio of the new stream yet
+                idle(nowNs);
                 return;
             }
             align(fifo);
@@ -191,12 +228,15 @@ namespace mbs::audio
         std::size_t const rest = frames - produced;
 
         auto current = fill(fifo);
-        auto const target = static_cast<std::size_t>(_target);
+        auto target = static_cast<std::size_t>(_target);
         if (_debt > 0)
         {
             if (nowNs > _debtSinceNs + kDebtNs)
             {
-                _debt = 0; // it was a loss, not lateness: the controller brings the fill back
+                // It was a loss, not lateness: the latency is what the fill is now, and the video
+                // delay follows it at once; the controller brings the fill to the (lower) target.
+                forgive(current);
+                target = static_cast<std::size_t>(_target);
             }
             else if (current > target)
             {
@@ -214,16 +254,20 @@ namespace mbs::audio
             {
                 silence(produced);
                 _stats.underrunFrames += rest;
-                if (_debt == 0)
+                if (!_lostUntilResume) // after a loss the silence until the audio resumes is not lateness
                 {
-                    _debtSinceNs = nowNs;
+                    if (_debt == 0)
+                    {
+                        _debtSinceNs = nowNs;
+                    }
+                    _debt += rest;
+                    raise(rest, nowNs);
                 }
-                _debt += rest;
-                raise(rest, nowNs);
                 _stats.fillSeconds = static_cast<double>(current) / kSampleRate;
                 return;
             }
             _waiting = false;
+            _lostUntilResume = false;
         }
         if (static_cast<double>(current) > kOverrunFactor * _target)
         {

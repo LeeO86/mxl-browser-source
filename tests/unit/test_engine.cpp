@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -792,4 +793,140 @@ TEST_CASE("the video delay follows the adaptive audio target one grain per tick,
         repeats += shown[i] == shown[i - 1] ? 1 : 0;
     }
     CHECK(repeats == extraGrains);
+}
+
+TEST_CASE("the video delay counts nominal grains: at 59.94 a constant audio extra never flips between ticks of 800 and 801 frames")
+{
+    // 59.94: 48000 · 1001 / 60000 = 800.8 frames per grain; the ticks alternate 800 and 801.
+    double const nominal = 48000.0 * 1001.0 / 60000.0;
+    std::vector<std::size_t> tickFrames;
+    for (std::uint64_t i = 0; i < 10; ++i)
+    {
+        tickFrames.push_back(static_cast<std::size_t>((i + 1) * 48000 * 1001 / 60000 - i * 48000 * 1001 / 60000));
+    }
+    CHECK(std::count(tickFrames.begin(), tickFrames.end(), 800) == 2);
+    CHECK(std::count(tickFrames.begin(), tickFrames.end(), 801) == 8);
+    // 4402 frames lies between 5.5 grains of 800 (4400) and of 801 (4405.5): dividing by the
+    // tick's frames wanted 6 and 5 by turns, a repeat and a skip about 12 times a second.
+    int flips = 0;
+    std::uint32_t last = engine::videoDelayExtraGrains(4402, nominal);
+    for (int k = 0; k < 600; ++k)
+    {
+        auto const grains = engine::videoDelayExtraGrains(4402, nominal);
+        flips += grains != last ? 1 : 0;
+        last = grains;
+    }
+    CHECK(flips == 0);
+    CHECK(last == 5);
+    CHECK(std::lround(4402.0 / 800) != std::lround(4402.0 / 801)); // the old divisor did flip
+    // Whole grains, rounded; nothing for no extra.
+    CHECK(engine::videoDelayExtraGrains(0, nominal) == 0);
+    CHECK(engine::videoDelayExtraGrains(-100, nominal) == 0);
+    CHECK(engine::videoDelayExtraGrains(14400, 960) == 15);
+    CHECK(engine::videoDelayExtraGrains(14400 - 481, 960) == 14);
+}
+
+TEST_CASE("the audio FIFO holds the largest target up to the overrun cut")
+{
+    EngineSettings s;
+    s.audioTargetFrames = 2880;
+    s.audioMaxTargetFrames = 0;
+    CHECK(engine::audioFifoFrames(s) == 3 * (2880 + 24000) + 4800);
+    s.audioTargetFrames = 500 * 48;
+    s.audioMaxTargetFrames = 500 * 48; // the largest settings: 500 ms target, +500 ms AV offset
+    CHECK(engine::audioFifoFrames(s) == 3 * 48000 + 4800);
+    s.audioTargetFrames = 960;
+    s.audioMaxTargetFrames = 14400;
+    CHECK(engine::audioFifoFrames(s) >= static_cast<std::size_t>(audio::Resampler::kOverrunFactor * (14400 + engine::kMaxAvOffsetFrames)));
+}
+
+TEST_CASE("the trace rings are copied while writers keep writing, without a lock")
+{
+    util::TraceRing<engine::AudioTraceEvent> ring(256);
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> writers;
+    for (int w = 0; w < 2; ++w)
+    {
+        writers.emplace_back([&, w] {
+            std::int64_t n = 0;
+            while (!stop.load())
+            {
+                // Every field carries the same number, so a torn copy would show.
+                ring.record({static_cast<std::uint64_t>(n + 1), engine::AudioTraceKind::Packet, w, n, n, n, n});
+                ++n;
+            }
+        });
+    }
+    std::size_t copied = 0;
+    for (int i = 0; i < 200; ++i)
+    {
+        auto const events = ring.snapshot();
+        CHECK(events.size() <= 256);
+        for (auto const& e : events)
+        {
+            CHECK(e.b == e.c);
+            CHECK(e.c == e.d);
+            CHECK(e.d == e.e);
+            CHECK(e.ns == static_cast<std::uint64_t>(e.b + 1));
+        }
+        copied += events.size();
+    }
+    stop = true;
+    for (auto& t : writers)
+    {
+        t.join();
+    }
+    CHECK(copied > 0);
+    auto const last = ring.snapshot();
+    CHECK(last.size() == 256); // quiet: every slot complete
+}
+
+TEST_CASE("when the stream stops, a raised audio target and the video delay go back after the hold")
+{
+    ManualClock clock(20000 * kPeriod);
+    Recorder outputs;
+    util::Metrics metrics("test_");
+    auto settings = small();
+    settings.videoDelayGrains = 1;
+    settings.audioMaxTargetFrames = 14400;
+    settings.videoDelayMaxGrains = 1 + 12;
+    Engine engine(settings, clock, outputs, metrics);
+    engine.setPageState(PageState::Ready);
+    engine.audioStreamStarted();
+    engine.setAudioActive(true);
+    engine.start();
+    PacketSource source;
+    std::uint64_t k = 20001;
+    for (int i = 0; i < 50; ++i)
+    {
+        source.push(engine);
+        clock.tick(k++);
+    }
+    for (int i = 0; i < 10; ++i) // 200 ms held, then delivered at once
+    {
+        clock.tick(k++);
+    }
+    source.push(engine, 20);
+    for (int i = 0; i < 30; ++i)
+    {
+        source.push(engine);
+        clock.tick(k++);
+    }
+    auto const raised = engine.stats().videoDelayGrains;
+    REQUIRE(raised > 1);
+    engine.setAudioActive(false); // the clip ended; a graphics page follows
+    for (int i = 0; i < 400; ++i) // 8 s: within the hold
+    {
+        clock.tick(k++);
+    }
+    CHECK(engine.stats().videoDelayGrains == raised);
+    for (int i = 0; i < 150; ++i) // past 10 s since the underrun, and a grain per tick back
+    {
+        clock.tick(k++);
+    }
+    clock.release();
+    engine.stop();
+    CHECK(engine.stats().videoDelayGrains == 1);
+    CHECK(engine.stats().audio.targetSeconds == doctest::Approx(0.06));
+    CHECK(engine.stats().audioFifoOverflows == 0);
 }

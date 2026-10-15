@@ -79,8 +79,6 @@ namespace mbs::engine
         _pool.resize(_settings.videoDelayMaxGrains + _settings.pipelineGrains + 3);
         _pending.reserve(_settings.pipelineGrains + 2);
         _poolBeginFrame.assign(_pool.size(), 0);
-        _trace.resize(kTraceEvents);
-        _audioTrace.resize(kAudioTraceEvents);
         _store.setClock([this] { return _clock.nowNs(); });
         for (auto& set : _pool)
         {
@@ -99,7 +97,7 @@ namespace mbs::engine
 
         if (_settings.audioChannels > 0)
         {
-            _fifo = std::make_unique<audio::Fifo>(_settings.audioChannels, 48000);
+            _fifo = std::make_unique<audio::Fifo>(_settings.audioChannels, audioFifoFrames(_settings));
             _resampler = std::make_unique<audio::Resampler>(_settings.audioChannels, _settings.audioTargetFrames, _settings.audioMaxTargetFrames);
             _audioBuffer.assign(static_cast<std::size_t>(4800) * _settings.audioChannels, 0.f);
             _stats.audioPeakDbfs.assign(_settings.audioChannels, -120.0);
@@ -250,48 +248,40 @@ namespace mbs::engine
 
     void Engine::record(TraceKind kind, std::uint64_t ns, std::uint64_t a, std::uint64_t b)
     {
-        std::lock_guard lock{_traceMutex};
-        _trace[_traceNext] = TraceEvent{ns, kind, a, b};
-        if (++_traceNext == _trace.size())
-        {
-            _traceNext = 0;
-            _traceFull = true;
-        }
+        _trace.record(TraceEvent{ns, kind, a, b});
     }
 
     void Engine::recordAudio(AudioTraceEvent const& event)
     {
-        std::lock_guard lock{_audioTraceMutex};
-        _audioTrace[_audioTraceNext] = event;
-        if (++_audioTraceNext == _audioTrace.size())
-        {
-            _audioTraceNext = 0;
-            _audioTraceFull = true;
-        }
+        _audioTrace.record(event);
     }
 
     std::vector<AudioTraceEvent> Engine::audioTrace() const
     {
-        std::lock_guard lock{_audioTraceMutex};
-        std::vector<AudioTraceEvent> out;
-        if (_audioTraceFull)
-        {
-            out.assign(_audioTrace.begin() + static_cast<std::ptrdiff_t>(_audioTraceNext), _audioTrace.end());
-        }
-        out.insert(out.end(), _audioTrace.begin(), _audioTrace.begin() + static_cast<std::ptrdiff_t>(_audioTraceNext));
-        return out;
+        return _audioTrace.snapshot();
     }
 
     std::vector<TraceEvent> Engine::trace() const
     {
-        std::lock_guard lock{_traceMutex};
-        std::vector<TraceEvent> out;
-        if (_traceFull)
+        return _trace.snapshot();
+    }
+
+    std::uint32_t videoDelayExtraGrains(double extraFrames, double grainFrames)
+    {
+        if (extraFrames <= 0 || grainFrames <= 0)
         {
-            out.assign(_trace.begin() + static_cast<std::ptrdiff_t>(_traceNext), _trace.end());
+            return 0;
         }
-        out.insert(out.end(), _trace.begin(), _trace.begin() + static_cast<std::ptrdiff_t>(_traceNext));
-        return out;
+        return static_cast<std::uint32_t>(std::lround(extraFrames / grainFrames));
+    }
+
+    std::size_t audioFifoFrames(EngineSettings const& settings)
+    {
+        // The largest target (the adaptive maximum plus the largest BROWSER_AV_OFFSET_MS) times
+        // the overrun factor, where the resampler cuts back, plus 100 ms for the packet that
+        // finds it there; never below the 1 s of earlier versions.
+        auto const target = static_cast<double>(std::max(settings.audioTargetFrames, settings.audioMaxTargetFrames) + kMaxAvOffsetFrames);
+        return std::max<std::size_t>(48000, static_cast<std::size_t>(std::ceil(audio::Resampler::kOverrunFactor * target)) + 4800);
     }
 
     void Engine::setPageState(PageState state)
@@ -351,6 +341,7 @@ namespace mbs::engine
         if (ptsMs >= 0)
         {
             // An upstream loss: exactly its length of silence goes first (SPEC §6).
+            auto const unfilled = _gaps.unfilled();
             if (lost = _gaps.onPacket(ptsMs, frames); lost > 0)
             {
                 _fifo->pushSilence(lost);
@@ -358,10 +349,31 @@ namespace mbs::engine
             _audioGaps.store(_gaps.gaps(), std::memory_order_relaxed);
             _audioGapFrames.store(_gaps.gapFrames(), std::memory_order_relaxed);
             _audioGapsUnfilled.store(_gaps.unfilled(), std::memory_order_relaxed);
+            if (_gaps.unfilled() > unfilled)
+            {
+                _audioLost.store(true); // a jump too long to fill: the tick lowers a raised target (lost, not late)
+            }
         }
         // Page channels beyond the flow's count are dropped, missing ones are silent.
         auto const now = _clock.nowNs();
-        _fifo->push(planes, planeCount, frames, now);
+        if (auto const stored = _fifo->push(planes, planeCount, frames, now); stored < frames)
+        {
+            // Cannot happen with the FIFO sized from the largest target; counted if it does, and
+            // logged at the 1st, 10th, 100th, … time (this is CEF's audio thread).
+            auto const count = _audioOverflows.fetch_add(1, std::memory_order_relaxed) + 1;
+            _audioOverflowFrames.fetch_add(frames - stored, std::memory_order_relaxed);
+            if (auto c = count; c > 0)
+            {
+                while (c % 10 == 0)
+                {
+                    c /= 10;
+                }
+                if (c == 1)
+                {
+                    log::warn("audio_fifo_overflow", {{"count", count}, {"dropped_frames", frames - stored}, {"capacity_frames", _fifo->capacity()}});
+                }
+            }
+        }
         timespec mono{};
         clock_gettime(CLOCK_MONOTONIC, &mono);
         recordAudio({now, AudioTraceKind::Packet, ptsMs, static_cast<std::int64_t>(frames), static_cast<std::int64_t>(_fifo->available()),
@@ -441,6 +453,9 @@ namespace mbs::engine
         out.audioGaps = _audioGaps.load(std::memory_order_relaxed);
         out.audioGapFrames = _audioGapFrames.load(std::memory_order_relaxed);
         out.audioGapsUnfilled = _audioGapsUnfilled.load(std::memory_order_relaxed);
+        out.audioFifoOverflows = _audioOverflows.load(std::memory_order_relaxed);
+        out.audioFifoOverflowFrames = _audioOverflowFrames.load(std::memory_order_relaxed);
+        out.audioFifoFrames = _fifo ? _fifo->capacity() : 0;
         out.internalFrameClock = _frameClock != nullptr;
         out.videoDelayGrains = _videoDelayNow.load(std::memory_order_relaxed);
         if (_frameClock)
@@ -698,6 +713,10 @@ namespace mbs::engine
         bool const active = _audioActive.load();
         auto const stream = _audioStream.load();
         float* out = _audioBuffer.data();
+        if (_audioLost.exchange(false))
+        {
+            _resampler->lost(*_fifo);
+        }
         if (active)
         {
             if (!_audioWasActive || stream != _audioStreamSeen)
@@ -726,15 +745,19 @@ namespace mbs::engine
             else
             {
                 std::fill(out, out + frames * channels, 0.f); // the flow never stops (SPEC §6)
+                _resampler->idle(_clock.nowNs()); // no stream: a raised target (and the video delay) goes back
             }
         }
         _audioWasActive = active;
         _audioStreamSeen = stream;
         if (_settings.videoDelayMaxGrains > _settings.videoDelayGrains)
         {
-            // Lip sync: the video is delayed by what the adaptive target added, in whole grains.
-            auto const grains = std::lround(std::max(0.0, _resampler->extraFrames()) / static_cast<double>(frames));
-            _videoDelayWanted = std::min(_settings.videoDelayMaxGrains, _settings.videoDelayGrains + static_cast<std::uint32_t>(grains));
+            // Lip sync: the video is delayed by what the adaptive target added, in whole grains of
+            // the nominal length (800.8 frames at 59.94, not this tick's 800 or 801: dividing by
+            // those flipped the rounding every fifth tick near a half grain, a repeat and a skip).
+            double const grainFrames = static_cast<double>(_clock.sampleAt(index + 1000) - first) / 1000.0;
+            auto const grains = videoDelayExtraGrains(_resampler->extraFrames(), grainFrames);
+            _videoDelayWanted = std::min(_settings.videoDelayMaxGrains, _settings.videoDelayGrains + grains);
         }
         if (_audioEnabled.load())
         {
