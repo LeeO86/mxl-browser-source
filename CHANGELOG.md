@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.3.0)
+## 1.3.0
 
 - EBU OGraf v1 (`docs/ograf.md`, SPEC §4.6):
   - The source field `mode` (`page` | `ograf`). In `ograf` the browser shows a built-in renderer with 8 layers (one iframe each, 8 on top); the output is the same fill and key as before.
@@ -54,6 +54,7 @@
   - Memory: the adaptive audio target (`BROWSER_AUDIO_BUFFER_MAX_MS=300`) sizes the delay ring and the buffer pool for up to 240 ms of extra video delay, allocated at start. Extra memory per format: 1080p50 about 100 MB (`v210a`, 12 sets of 8.3 MB; `fill_key` 133 MB, `v210` 66 MB), 1080p59.94 about 125 MB (15 sets; `fill_key` 166 MB), 2160p50 about 400 MB (12 sets of 33 MB; `fill_key` 530 MB), 2160p59.94 about 500 MB (15 sets; `fill_key` 664 MB). `BROWSER_AUDIO_BUFFER_MAX_MS=60` (the base) turns it off and saves that memory. The audio FIFO grows to at most 149 k frames per channel (about 1.2 MB in stereo).
   - The `/api/v1/debug/` routes answer 404 unless `BROWSER_DEVTOOLS=true`.
   - Ports are unchanged.
+- The Compose and Kubernetes examples use the `1.3.0` image.
 
 ## 1.2.0
 

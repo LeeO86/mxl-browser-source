@@ -127,7 +127,7 @@ Our own routes:
 
 No token (the page asks for it). SPEC §10.6.
 
-`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.2.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.2.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
+`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.3.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.3.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
 
 `GET /widget/interaction[?theme=dark|light|transparent]` and `GET /widget/ograf[?theme=…&layers=1,2]` → the UI page with only the interaction window, or the Graphics tab's preview, layers and form (only the listed layers; no library, upload or delete; `docs/ograf.md` §8), `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
 
