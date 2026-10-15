@@ -55,20 +55,25 @@ DOCKER = os.environ.get("DOCKER", "docker").split()
 # DevTools (page target, through the function's /devtools/ proxy)
 
 class DevTools:
-    def __init__(self, base):
+    def __init__(self, base, target=None):
         m = re.match(r"https?://([^:/]+):(\d+)", base)
         self.host, self.port = m.group(1), int(m.group(2))
         self.base = base
+        self.target = target  # evaluate in the first target whose URL contains this (an iframe), else the page
         self.next_id = 0
 
-    def page(self):
+    def page(self, top=False):
         code, pages = request(self.base, "GET", "/devtools/json/list")
         if code != 200:
             return None
+        if self.target and not top:
+            found = next((p for p in pages if self.target in p.get("url", "")), None)
+            if found:
+                return found
         return next((p for p in pages if p.get("type") == "page"), None)
 
-    def connect(self):
-        page = self.page()
+    def connect(self, top=False):
+        page = self.page(top)
         return ws_connect(self.host, self.port, "/devtools/page/" + page["id"]) if page else None
 
     def call(self, sock, method, params=None, seconds=10):
@@ -93,7 +98,7 @@ class DevTools:
 
     def trace(self, seconds, categories="audio,media,gpu.capture"):
         """Event counts by name of a trace of `seconds` (Tracing domain of the page target)."""
-        sock = self.connect()
+        sock = self.connect(top=True)
         if sock is None:
             return {"error": "no page target"}
         counts, events = {}, 0
@@ -317,6 +322,8 @@ def main():
     p.add_argument("--smi", action="store_true", help="poll nvidia-smi every second during the run")
     p.add_argument("--chromium-trace", type=int, default=0, help="seconds of Chromium tracing (audio, media, gpu.capture)")
     p.add_argument("--no-navigate", action="store_true")
+    p.add_argument("--target", default=None, help="DevTools target (URL substring) for the page stats, e.g. youtube.com/embed "
+                   "for templates/youtube.html; default the page")
     p.add_argument("--no-audio", action="store_true")
     p.add_argument("--reader", default="mxl-bs-grain-reader", help="the grain reader inside the container")
     args = p.parse_args()
@@ -334,7 +341,7 @@ def main():
         assert code in (200, 202), (code, body)
     time.sleep(args.warmup)
 
-    devtools = DevTools(args.base)
+    devtools = DevTools(args.base, args.target)
     page_before = devtools.evaluate(PAGE_STATS)
     host_before = host_state(args.container, args.gpu)
     procs0 = proc_times(args.container)
