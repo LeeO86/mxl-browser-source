@@ -282,7 +282,8 @@ def poll_trace(base, merged, stop):
         code, trace = request(base, "GET", "/api/v1/debug/frame-trace")
         if code == 200:
             for k in ("period_ns", "frame_clock", "phase_ns"):
-                merged[k] = trace.get(k, merged.get(k))
+                if trace.get(k) is not None:  # images before M6 have no frame_clock/phase_ns
+                    merged[k] = trace[k]
             seen = merged.setdefault("_seen", set())
             for e in trace["events"]:
                 key = tuple(e)

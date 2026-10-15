@@ -54,7 +54,7 @@ def summary(name, values):
 def analyse(trace):
     period = trace["period_ns"]
     internal = trace.get("frame_clock") == "internal"
-    phase = trace.get("phase_ns", 0)
+    phase = trace.get("phase_ns") or 0  # absent (None) in traces of images before M6
     ticks, posted, sent, commits, anchors = [], [], [], [], []
     frames = {}  # paint sequence -> {"in", "stored", "start", "bf", "end"}
     for ns, kind, a, b in trace["events"]:
