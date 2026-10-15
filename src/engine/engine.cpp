@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <functional>
 #include <cmath>
 #include <utility>
@@ -76,6 +77,7 @@ namespace mbs::engine
         _pending.reserve(_settings.pipelineGrains + 2);
         _poolBeginFrame.assign(_pool.size(), 0);
         _trace.resize(kTraceEvents);
+        _audioTrace.resize(kAudioTraceEvents);
         _store.setClock([this] { return _clock.nowNs(); });
         for (auto& set : _pool)
         {
@@ -246,6 +248,29 @@ namespace mbs::engine
         }
     }
 
+    void Engine::recordAudio(AudioTraceEvent const& event)
+    {
+        std::lock_guard lock{_audioTraceMutex};
+        _audioTrace[_audioTraceNext] = event;
+        if (++_audioTraceNext == _audioTrace.size())
+        {
+            _audioTraceNext = 0;
+            _audioTraceFull = true;
+        }
+    }
+
+    std::vector<AudioTraceEvent> Engine::audioTrace() const
+    {
+        std::lock_guard lock{_audioTraceMutex};
+        std::vector<AudioTraceEvent> out;
+        if (_audioTraceFull)
+        {
+            out.assign(_audioTrace.begin() + static_cast<std::ptrdiff_t>(_audioTraceNext), _audioTrace.end());
+        }
+        out.insert(out.end(), _audioTrace.begin(), _audioTrace.begin() + static_cast<std::ptrdiff_t>(_audioTraceNext));
+        return out;
+    }
+
     std::vector<TraceEvent> Engine::trace() const
     {
         std::lock_guard lock{_traceMutex};
@@ -263,21 +288,59 @@ namespace mbs::engine
         _pageState.store(state);
     }
 
+    void Engine::holdAudio(std::uint32_t ms)
+    {
+        _holdUntilNs.store(_clock.nowNs() + static_cast<std::uint64_t>(ms) * 1'000'000ULL);
+    }
+
     void Engine::pushAudio(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs)
     {
         if (!_fifo)
         {
             return;
         }
+        if (auto const until = _holdUntilNs.load(std::memory_order_relaxed); until != 0)
+        {
+            if (_clock.nowNs() < until)
+            {
+                HeldPacket held{std::vector<float>(static_cast<std::size_t>(planeCount) * frames, 0.f), planeCount, frames, ptsMs};
+                for (int c = 0; c < planeCount; ++c)
+                {
+                    if (planes[c] != nullptr)
+                    {
+                        std::copy(planes[c], planes[c] + frames, held.samples.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(c) * frames));
+                    }
+                }
+                _held.push_back(std::move(held));
+                return;
+            }
+            _holdUntilNs.store(0, std::memory_order_relaxed);
+            for (auto const& held : _held)
+            {
+                std::vector<float const*> heldPlanes;
+                for (int c = 0; c < held.planeCount; ++c)
+                {
+                    heldPlanes.push_back(held.samples.data() + static_cast<std::size_t>(c) * held.frames);
+                }
+                pushPacket(heldPlanes.data(), held.planeCount, held.frames, held.ptsMs);
+            }
+            _held.clear();
+        }
+        pushPacket(planes, planeCount, frames, ptsMs);
+    }
+
+    void Engine::pushPacket(float const* const* planes, int planeCount, std::size_t frames, std::int64_t ptsMs)
+    {
         if (auto const stream = _audioStream.load(); stream != _audioStreamProducer)
         {
             _audioStreamProducer = stream;
             _gaps.reset();
         }
+        std::size_t lost = 0;
         if (ptsMs >= 0)
         {
             // An upstream loss: exactly its length of silence goes first (SPEC §6).
-            if (auto const lost = _gaps.onPacket(ptsMs, frames); lost > 0)
+            if (lost = _gaps.onPacket(ptsMs, frames); lost > 0)
             {
                 _fifo->pushSilence(lost);
             }
@@ -286,7 +349,12 @@ namespace mbs::engine
             _audioGapsUnfilled.store(_gaps.unfilled(), std::memory_order_relaxed);
         }
         // Page channels beyond the flow's count are dropped, missing ones are silent.
-        _fifo->push(planes, planeCount, frames, _clock.nowNs());
+        auto const now = _clock.nowNs();
+        _fifo->push(planes, planeCount, frames, now);
+        timespec mono{};
+        clock_gettime(CLOCK_MONOTONIC, &mono);
+        recordAudio({now, AudioTraceKind::Packet, ptsMs, static_cast<std::int64_t>(frames), static_cast<std::int64_t>(_fifo->available()),
+                     static_cast<std::int64_t>(lost), static_cast<std::int64_t>(mono.tv_sec) * 1'000'000'000LL + mono.tv_nsec});
     }
 
     void Engine::audioStreamStarted()
@@ -609,7 +677,13 @@ namespace mbs::engine
                 _resampler->start(); // a stream starts at the target fill (its first sample is not cut)
             }
             _audioDraining = false;
-            _resampler->produce(*_fifo, out, frames, _clock.nowNs());
+            auto const now = _clock.nowNs();
+            auto const before = _resampler->fill(*_fifo);
+            _resampler->produce(*_fifo, out, frames, now);
+            auto const& st = _resampler->stats();
+            recordAudio({now, AudioTraceKind::Tick, static_cast<std::int64_t>(before), static_cast<std::int64_t>(_resampler->target()),
+                         static_cast<std::int64_t>(st.underrunFrames), static_cast<std::int64_t>(st.realigned),
+                         static_cast<std::int64_t>(_resampler->fill(*_fifo))});
         }
         else
         {

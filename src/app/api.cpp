@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <regex>
 #include <sstream>
@@ -686,6 +687,40 @@ namespace mbs::app
             {
                 out += (first ? "[" : ",[") + std::to_string(e.ns) + ",\"" + kKinds[static_cast<int>(e.kind)] + "\"," + std::to_string(e.a) + "," +
                        std::to_string(e.b) + "]";
+                first = false;
+            }
+            reply(res, 200, out + "]}");
+            return;
+        }
+        if (path == "/api/v1/debug/audio-hold" && method == "POST" && _cfg.devtools)
+        {
+            // Diagnosis (BROWSER_DEVTOOLS=true only): hold the page's audio packets for ?ms= (1-1000)
+            // and deliver them at once, as Chromium's late bursts do (docs/performance.md, M7).
+            auto const ms = std::atoi(ops::queryValue(req.query, "ms").c_str());
+            if (ms < 1 || ms > 1000)
+            {
+                error(res, 400, "ms must be 1-1000");
+                return;
+            }
+            _engine->holdAudio(static_cast<std::uint32_t>(ms));
+            reply(res, 202, R"({"held_ms":)" + std::to_string(ms) + "}");
+            return;
+        }
+        if (path == "/api/v1/debug/audio-trace" && method == "GET")
+        {
+            // The audio path's newest events (docs/api.md): [TAI ns, kind, a, b, c, d, e] each.
+            auto const events = _engine->audioTrace();
+            std::string out = R"({"events":[)";
+            out.reserve(out.size() + events.size() * 64);
+            bool first = true;
+            for (auto const& e : events)
+            {
+                if (e.ns == 0)
+                {
+                    continue;
+                }
+                out += (first ? "[" : ",[") + std::to_string(e.ns) + (e.kind == engine::AudioTraceKind::Packet ? ",\"packet\"," : ",\"tick\",") +
+                       std::to_string(e.a) + "," + std::to_string(e.b) + "," + std::to_string(e.c) + "," + std::to_string(e.d) + "," + std::to_string(e.e) + "]";
                 first = false;
             }
             reply(res, 200, out + "]}");

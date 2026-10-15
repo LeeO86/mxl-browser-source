@@ -299,6 +299,86 @@ def poll_trace(base, merged, stop):
             break
 
 
+def poll_audio_trace(base, merged, stop):
+    """The function's audio trace (/api/v1/debug/audio-trace, about 100 s deep): every packet from
+    OnAudioStreamPacket (arrival TAI ns, pts ms, frames, FIFO after it, gap fill, arrival
+    CLOCK_MONOTONIC ns) and every grain (FIFO before, target, underrun and realigned frames, FIFO
+    after). Images without the endpoint give nothing."""
+    seen = set()
+    while True:
+        code, trace = request(base, "GET", "/api/v1/debug/audio-trace")
+        if code == 200 and isinstance(trace, dict):
+            for e in trace.get("events", []):
+                key = (e[0], e[1])
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(e)
+        if stop.wait(15):
+            break
+
+
+def poll_position(devtools, log, stop):
+    """The media position (video.currentTime of the stats target) against wall time, every 2 s."""
+    while not stop.wait(2):
+        t = time.time()
+        pos = devtools.evaluate("(() => { const v = document.querySelector('video'); return v ? [v.currentTime, v.paused] : null; })()")
+        if pos:
+            log.append([round((t + time.time()) / 2, 3), pos[0], pos[1]])
+
+
+def container_cgroup(container):
+    cid = subprocess.run([*DOCKER, "inspect", "-f", "{{.Id}}", container], capture_output=True, text=True).stdout.strip()
+    path = f"/sys/fs/cgroup/system.slice/docker-{cid}.scope"
+    return path if cid and os.path.isdir(path) else None
+
+
+def poll_cpus(container, log, stop):
+    """Per second: the busy share of each CPU of the container's cpuset and of their hyperthread
+    siblings, and the container's own CPU, so other load on those CPUs shows as busy - own."""
+    cpuset = subprocess.run([*DOCKER, "inspect", "-f", "{{.HostConfig.CpusetCpus}}", container], capture_output=True, text=True).stdout.strip()
+    cpus = sorted({int(x) for part in cpuset.split(",") if part for x in
+                   (range(int(part.split("-")[0]), int(part.split("-")[-1]) + 1))})
+    siblings = set()
+    for c in cpus:
+        try:
+            for part in open(f"/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list").read().strip().split(","):
+                a, _, b = part.partition("-")
+                siblings.update(range(int(a), int(b or a) + 1))
+        except OSError:
+            pass
+    siblings -= set(cpus)
+    cg = container_cgroup(container)
+
+    def snap():
+        d = {}
+        for line in open("/proc/stat"):
+            if line.startswith("cpu") and line[3] != " ":
+                f = line.split()
+                v = list(map(int, f[1:]))
+                d[int(f[0][3:])] = (sum(v), v[3] + v[4])
+        own = 0
+        if cg:
+            for line in open(cg + "/cpu.stat"):
+                if line.startswith("usage_usec"):
+                    own = int(line.split()[1])
+        return time.time(), d, own
+
+    prev = snap()
+    log.append({"cpus": cpus, "siblings": sorted(siblings)})
+    while not stop.wait(1):
+        cur = snap()
+        dt = cur[0] - prev[0]
+
+        def busy(c):
+            t = cur[1][c][0] - prev[1][c][0]
+            return 0.0 if t <= 0 else (t - (cur[1][c][1] - prev[1][c][1])) / t
+        b = sum(busy(c) for c in cpus)
+        own = (cur[2] - prev[2]) / 1e6 / dt
+        log.append([round(cur[0], 2), round(b, 3), round(own, 3), round(sum(busy(c) for c in siblings), 3),
+                    max(round(busy(c), 2) for c in cpus)])
+        prev = cur
+
+
 def poll_smi(gpu, log, stop):
     while not stop.wait(1):
         out = subprocess.run(["nvidia-smi", "-i", str(gpu), "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"],
@@ -351,7 +431,11 @@ def main():
     stop = threading.Event()
     merged = {}
     smi_log = []
-    threads = [threading.Thread(target=poll_trace, args=(args.base, merged, stop))]
+    audio_trace, positions, cpu_log = [], [], []
+    threads = [threading.Thread(target=poll_trace, args=(args.base, merged, stop)),
+               threading.Thread(target=poll_audio_trace, args=(args.base, audio_trace, stop)),
+               threading.Thread(target=poll_position, args=(devtools, positions, stop)),
+               threading.Thread(target=poll_cpus, args=(args.container, cpu_log, stop))]
     if args.smi:
         threads.append(threading.Thread(target=poll_smi, args=(args.gpu, smi_log, stop)))
     for t in threads:
@@ -390,6 +474,11 @@ def main():
     merged["events"] = sorted(merged.get("events", []))
     with open(os.path.join(args.dir, f"{tag}-trace.json"), "w") as f:
         json.dump(merged, f)
+    audio_trace.sort()
+    with open(os.path.join(args.dir, f"{tag}-audiotrace.json"), "w") as f:
+        json.dump({"t0": t0, "positions": positions, "cpu": cpu_log, "events": audio_trace}, f)
+    cpu_rows = [r for r in cpu_log if isinstance(r, list)]
+    foreign = sorted(max(0.0, r[1] - r[2]) for r in cpu_rows)
 
     # Analysis.
     counter = []
@@ -425,6 +514,9 @@ def main():
         "cpu_cores": cpu_by_kind(procs0, procs1, seconds), "page": {"before": page_before, "after": page_after},
         "chromium_trace": chromium, "smi_polls": len(smi_log), "histograms": histograms(m0, m1),
         "host": [host_before, host_during, host_after],
+        "cpuset_other_load": None if not foreign else {"median_cores": foreign[len(foreign) // 2], "p95_cores": foreign[int(0.95 * (len(foreign) - 1))],
+                                                       "max_cores": foreign[-1], "siblings_median_cores": sorted(r[3] for r in cpu_rows)[len(cpu_rows) // 2]},
+        "audio_trace_events": len(audio_trace),
     }
     with open(args.out, "a") as f:
         f.write(json.dumps(result, default=str) + "\n")

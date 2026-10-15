@@ -70,8 +70,10 @@ namespace mbs::audio
         [[nodiscard]] ResamplerStats const& stats() const { return _stats; }
         [[nodiscard]] std::size_t target() const { return static_cast<std::size_t>(_target); }
 
-    private:
+        /// Frames waiting: the FIFO plus the resampler's input.
         [[nodiscard]] std::size_t fill(Fifo const& fifo) const { return fifo.available() + _pending.size() / _channels; }
+
+    private:
         void dropOldest(Fifo& fifo, std::size_t frames);
         void align(Fifo& fifo);
         std::size_t resample(Fifo& fifo, float* out, std::size_t frames, double ratio);
