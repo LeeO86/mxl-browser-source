@@ -291,7 +291,7 @@ The last converted grain buffers are kept. A repeat copies them into the new gra
 
 `BROWSER_FORMAT` (default `1080p50`): `720p50`, `1080p25`, `1080p29.97`, `1080p50`, `1080p59.94` in v1. A format change needs a restart and gives new flow ids (§8).
 
-- **1080i50 (v1.1):** MXL interlaced grains are fields (the flow declares `grain_rate` 25/1 with `interlaced_tff` and the SDK doubles it, as the test player found). The source renders one BeginFrame per field (50 per second, so motion is truly interlaced), takes the even lines of frame 2n for the top field and the odd lines of frame 2n+1 for the bottom field, and MAY apply a vertical `[1 2 1]/4` filter (`BROWSER_INTERLACE_FILTER`, against twitter on thin graphics). Key the same way.
+- **1080i50 (v1.1):** MXL interlaced grains are fields (the flow declares `grain_rate` 25/1 with `interlaced_tff` and the SDK doubles it, as the test player found). The source renders one BeginFrame per field (50 per second, so motion is truly interlaced), takes the even lines of frame 2n for the top field and the odd lines of frame 2n+1 for the bottom field, and MAY apply a vertical `[1 2 1]/4` filter (`BROWSER_INTERLACE_FILTER`, against twitter on thin graphics). Key the same way. Interlaced video and its ANC follow the shared MXL interlaced convention: https://github.com/LeeO86/mxl-multiviewer/blob/main/docs/mxl-interlaced.md
 - **2160p50 (stage 3):** after the shared-texture path and a CUDA conversion are measured on an L4; until then 2160p is refused with exit 78.
 
 ## 6. Audio pipeline
