@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -42,11 +43,14 @@ namespace mbs::ops
         std::vector<std::pair<std::string, std::string>> headers;
     };
 
-    /// One WebSocket connection. Sends are thread-safe; a failed send closes the socket.
-    /// A client that stops reading never blocks a sender for long: text and control frames wait
-    /// at most kStuckTimeout for room (in order, never dropped), then the socket is closed;
-    /// binary frames (previews) never wait: a frame that does not fit is dropped (the next one
-    /// is newer), and a client that takes none for kStuckTimeout is closed.
+    /// One WebSocket connection. Sends are thread-safe, never block the caller and never write
+    /// half a frame between others; a failed send closes the socket.
+    /// Text and control frames are written at once when the socket has room, else they wait in
+    /// order in an outbox that the connection's thread drains. The socket is closed when the
+    /// outbox holds more than kOutboxBytes or its oldest frame is older than kStuckTimeout.
+    /// Binary frames (previews) are dropped instead of queued when the socket is full (the next
+    /// one is newer); one that has started is finished first. A client that takes no binary
+    /// frame for kStuckTimeout is closed too.
     class WebSocket
     {
     public:
@@ -56,16 +60,17 @@ namespace mbs::ops
         WebSocket& operator=(WebSocket const&) = delete;
 
         static constexpr std::chrono::milliseconds kStuckTimeout{5000};
+        static constexpr std::size_t kOutboxBytes = 4 * 1024 * 1024;
 
         enum class Sent
         {
             Yes,
-            Dropped, // the client's socket is full (or a text send is in progress)
+            Dropped, // the client's socket is full
             Closed,
         };
 
+        /// Queues the message; false when the socket is (or got) closed.
         bool sendText(std::string_view text);
-        /// Never blocks; see above.
         Sent sendBinary(std::string_view data);
         /// Sends a close frame and shuts the socket down; the reader thread ends.
         void close(int code = 1000);
@@ -74,14 +79,27 @@ namespace mbs::ops
 
     private:
         friend class HttpServer;
+        using Clock = std::chrono::steady_clock;
+        struct Frame
+        {
+            std::string bytes;
+            std::size_t sent = 0;
+            Clock::time_point queued;
+        };
+
         bool send(unsigned opcode, std::string_view payload);
-        void fail(); // with _sendMutex held
-        Sent dropped(); // with _sendMutex held: counts towards kStuckTimeout
+        /// For the connection's thread: writes what the outbox can; true while it still holds data.
+        bool flush();
+        // With _sendMutex held:
+        void fail();
+        void flushLocked(Clock::time_point now);
+        Sent dropped(Clock::time_point now); // counts towards kStuckTimeout
 
         int _fd;
-        std::string _pending; // the unsent rest of a binary frame; goes out before anything else
+        std::deque<Frame> _outbox;
+        std::size_t _outboxBytes = 0;
         bool _dropping = false;
-        std::chrono::steady_clock::time_point _droppingSince;
+        Clock::time_point _droppingSince;
         std::string _peer;
         std::mutex _sendMutex;
         std::atomic<bool> _open{true};

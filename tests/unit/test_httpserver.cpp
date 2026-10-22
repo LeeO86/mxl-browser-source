@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -253,7 +254,7 @@ TEST_CASE("an upload is admitted from its head, at most two at once, within a de
     std::filesystem::remove_all(dir);
 }
 
-TEST_CASE("WebSocket: a client that stops reading never blocks binary sends; text stays in order; stuck clients are closed")
+TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stays in order; stuck clients are closed")
 {
     std::shared_ptr<WebSocket> socket;
     std::mutex mutex;
@@ -313,7 +314,11 @@ TEST_CASE("WebSocket: a client that stops reading never blocks binary sends; tex
     auto [fd, ws] = connectSmall();
     int const sent = fill(*ws);
     CHECK(sent > 0);
-    std::thread text([&] { CHECK(ws->sendText("after")); }); // waits for room, then goes out
+    // The socket is full: the text is queued and the call returns at once.
+    auto const queued = std::chrono::steady_clock::now();
+    CHECK(ws->sendText("after"));
+    CHECK(std::chrono::steady_clock::now() - queued < std::chrono::milliseconds(20));
+    CHECK(ws->sendBinary(frame) == WebSocket::Sent::Dropped); // never between queued text
     std::string data;
     int frames = 0;
     std::string last;
@@ -356,7 +361,6 @@ TEST_CASE("WebSocket: a client that stops reading never blocks binary sends; tex
             data.erase(0, header + len);
         }
     }
-    text.join();
     CHECK(frames == sent);
     CHECK(last == "after");
     CHECK(ws->sendBinary(frame) == WebSocket::Sent::Yes); // reading again: frames flow
@@ -376,5 +380,38 @@ TEST_CASE("WebSocket: a client that stops reading never blocks binary sends; tex
     CHECK(std::chrono::steady_clock::now() - t0 >= WebSocket::kStuckTimeout);
     CHECK(!stuck->open());
     ::close(stuckFd);
+
+    // Text to a client that stops reading: every call returns at once (a broadcast from the CEF
+    // UI thread must not wait), and the connection's thread closes the socket after
+    // kStuckTimeout without any further send.
+    auto [textFd, textWs] = connectSmall();
+    fill(*textWs);
+    std::string const state(2000, 's');
+    auto longest = std::chrono::steady_clock::duration::zero();
+    auto const textStart = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i)
+    {
+        auto const t = std::chrono::steady_clock::now();
+        CHECK(textWs->sendText(state));
+        longest = std::max(longest, std::chrono::steady_clock::now() - t);
+    }
+    CHECK(longest < std::chrono::milliseconds(5));
+    while (textWs->open() && std::chrono::steady_clock::now() - textStart < WebSocket::kStuckTimeout * 2)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    CHECK(!textWs->open());
+    auto const closedAfter = std::chrono::steady_clock::now() - textStart;
+    CHECK(closedAfter >= WebSocket::kStuckTimeout);
+    CHECK(closedAfter < WebSocket::kStuckTimeout + std::chrono::seconds(1));
+    CHECK(!textWs->sendText(state));
+    ::close(textFd);
+
+    // More than kOutboxBytes queued: closed at once.
+    auto [bigFd, bigWs] = connectSmall();
+    fill(*bigWs);
+    CHECK(!bigWs->sendText(std::string(WebSocket::kOutboxBytes + 1, 'x')));
+    CHECK(!bigWs->open());
+    ::close(bigFd);
     server.stop();
 }

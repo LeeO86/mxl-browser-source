@@ -90,33 +90,6 @@ namespace mbs::ops
             return static_cast<long long>(off);
         }
 
-        // Writes all of `data` before `deadline`.
-        bool writeBy(int fd, std::string_view data, std::chrono::steady_clock::time_point deadline)
-        {
-            while (true)
-            {
-                auto const n = sendNow(fd, data);
-                if (n < 0)
-                {
-                    return false;
-                }
-                data.remove_prefix(static_cast<std::size_t>(n));
-                if (data.empty())
-                {
-                    return true;
-                }
-                auto const left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-                if (left <= 0)
-                {
-                    return false;
-                }
-                pollfd pfd{fd, POLLOUT, 0};
-                if (::poll(&pfd, 1, static_cast<int>(left)) < 0 && errno != EINTR)
-                {
-                    return false;
-                }
-            }
-        }
 
         std::string statusText(int status)
         {
@@ -266,16 +239,26 @@ namespace mbs::ops
         {
             return false;
         }
-        // In order and complete: the rest of a binary frame first, then this one, within the timeout.
-        auto const deadline = std::chrono::steady_clock::now() + kStuckTimeout;
-        if (!writeBy(_fd, _pending, deadline) || !writeBy(_fd, frameHeader(opcode, payload.size()) + std::string(payload), deadline))
+        auto const now = Clock::now();
+        _outbox.push_back({frameHeader(opcode, payload.size()) + std::string(payload), 0, now});
+        _outboxBytes += _outbox.back().bytes.size();
+        if (_outboxBytes > kOutboxBytes)
         {
             fail();
             return false;
         }
-        _pending.clear();
-        _dropping = false;
-        return true;
+        flushLocked(now);
+        return _open.load();
+    }
+
+    bool WebSocket::flush()
+    {
+        std::lock_guard lock{_sendMutex};
+        if (_open.load() && !_outbox.empty())
+        {
+            flushLocked(Clock::now());
+        }
+        return _open.load() && !_outbox.empty();
     }
 
     void WebSocket::fail()
@@ -284,9 +267,34 @@ namespace mbs::ops
         ::shutdown(_fd, SHUT_RDWR);
     }
 
-    WebSocket::Sent WebSocket::dropped()
+    void WebSocket::flushLocked(Clock::time_point now)
     {
-        auto const now = std::chrono::steady_clock::now();
+        while (!_outbox.empty())
+        {
+            auto& frame = _outbox.front();
+            auto const n = sendNow(_fd, std::string_view(frame.bytes).substr(frame.sent));
+            if (n < 0)
+            {
+                fail();
+                return;
+            }
+            frame.sent += static_cast<std::size_t>(n);
+            _outboxBytes -= static_cast<std::size_t>(n);
+            if (frame.sent < frame.bytes.size())
+            {
+                break; // the socket is full
+            }
+            _outbox.pop_front();
+            _dropping = false; // the client reads
+        }
+        if (!_outbox.empty() && now - _outbox.front().queued >= kStuckTimeout)
+        {
+            fail();
+        }
+    }
+
+    WebSocket::Sent WebSocket::dropped(Clock::time_point now)
+    {
         if (!_dropping)
         {
             _dropping = true;
@@ -307,28 +315,19 @@ namespace mbs::ops
 
     WebSocket::Sent WebSocket::sendBinary(std::string_view data)
     {
-        std::unique_lock lock{_sendMutex, std::try_to_lock};
-        if (!lock.owns_lock())
+        std::lock_guard lock{_sendMutex};
+        auto const now = Clock::now();
+        if (_open.load())
         {
-            return _open.load() ? Sent::Dropped : Sent::Closed; // a text send is waiting for room
+            flushLocked(now);
         }
         if (!_open.load())
         {
             return Sent::Closed;
         }
-        if (!_pending.empty())
+        if (!_outbox.empty())
         {
-            auto const n = sendNow(_fd, _pending);
-            if (n < 0)
-            {
-                fail();
-                return Sent::Closed;
-            }
-            _pending.erase(0, static_cast<std::size_t>(n));
-            if (!_pending.empty())
-            {
-                return dropped();
-            }
+            return dropped(now); // the socket is full
         }
         std::string frame = frameHeader(0x2, data.size()) + std::string(data);
         auto const n = sendNow(_fd, frame);
@@ -339,9 +338,14 @@ namespace mbs::ops
         }
         if (n == 0)
         {
-            return dropped();
+            return dropped(now);
         }
-        _pending = frame.substr(static_cast<std::size_t>(n)); // started frames are finished
+        if (static_cast<std::size_t>(n) < frame.size())
+        {
+            // A started frame is finished before anything else.
+            _outbox.push_back({std::move(frame), static_cast<std::size_t>(n), now});
+            _outboxBytes += _outbox.back().bytes.size() - _outbox.back().sent;
+        }
         _dropping = false;
         return Sent::Yes;
     }
@@ -349,18 +353,16 @@ namespace mbs::ops
     void WebSocket::close(int code)
     {
         std::lock_guard lock{_sendMutex};
-        if (!_open.exchange(false))
+        if (!_open.load())
         {
             return;
         }
         std::string payload;
         payload.push_back(static_cast<char>((code >> 8) & 0xff));
         payload.push_back(static_cast<char>(code & 0xff));
-        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        if (writeBy(_fd, _pending, deadline))
-        {
-            writeBy(_fd, frameHeader(0x8, payload.size()) + payload, deadline);
-        }
+        _outbox.push_back({frameHeader(0x8, payload.size()) + payload, 0, Clock::now()});
+        flushLocked(Clock::now()); // what fits now; the rest is lost with the connection
+        _open.store(false);
         ::shutdown(_fd, SHUT_RDWR);
     }
 
@@ -747,15 +749,17 @@ namespace mbs::ops
                 }
                 if (!progressed || buffer.size() < 2)
                 {
+                    // This thread also drains the socket's outbox (sends never block their callers).
                     pollfd pfd{};
                     pfd.fd = fd;
-                    pfd.events = POLLIN;
+                    pfd.events = static_cast<short>(POLLIN | (socket->flush() ? POLLOUT : 0));
                     int const rc = ::poll(&pfd, 1, 200);
                     if (rc < 0)
                     {
                         break;
                     }
-                    if (rc == 0)
+                    socket->flush(); // also closes a socket whose oldest frame waited too long
+                    if ((pfd.revents & (POLLIN | POLLHUP | POLLERR)) == 0)
                     {
                         continue;
                     }

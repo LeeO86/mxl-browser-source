@@ -164,8 +164,7 @@ def preview_rates(host, port):
     ws_send(b, {"type": "interact", "enable": True, "take": True})
     ws_send(b, {"type": "preview", "fps": 25})
     taken_over = fps(a)
-    ws_send(b, {"type": "interact", "enable": False})
-    ws_send(b, {"type": "preview"})
+    ws_send(b, {"type": "interact", "enable": False})  # no reset message: the server drops the rate itself
     released = fps(b)
     rates = f"watcher {watcher:.1f}, controller {controller:.1f}, after take-over {taken_over:.1f}, after release {released:.1f} fps"
     assert 7 <= watcher <= 12, rates
