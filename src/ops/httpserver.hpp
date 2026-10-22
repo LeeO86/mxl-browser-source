@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -42,6 +43,10 @@ namespace mbs::ops
     };
 
     /// One WebSocket connection. Sends are thread-safe; a failed send closes the socket.
+    /// A client that stops reading never blocks a sender for long: text and control frames wait
+    /// at most kStuckTimeout for room (in order, never dropped), then the socket is closed;
+    /// binary frames (previews) never wait: a frame that does not fit is dropped (the next one
+    /// is newer), and a client that takes none for kStuckTimeout is closed.
     class WebSocket
     {
     public:
@@ -50,8 +55,18 @@ namespace mbs::ops
         WebSocket(WebSocket const&) = delete;
         WebSocket& operator=(WebSocket const&) = delete;
 
+        static constexpr std::chrono::milliseconds kStuckTimeout{5000};
+
+        enum class Sent
+        {
+            Yes,
+            Dropped, // the client's socket is full (or a text send is in progress)
+            Closed,
+        };
+
         bool sendText(std::string_view text);
-        bool sendBinary(std::string_view data);
+        /// Never blocks; see above.
+        Sent sendBinary(std::string_view data);
         /// Sends a close frame and shuts the socket down; the reader thread ends.
         void close(int code = 1000);
         [[nodiscard]] bool open() const { return _open.load(); }
@@ -60,8 +75,13 @@ namespace mbs::ops
     private:
         friend class HttpServer;
         bool send(unsigned opcode, std::string_view payload);
+        void fail(); // with _sendMutex held
+        Sent dropped(); // with _sendMutex held: counts towards kStuckTimeout
 
         int _fd;
+        std::string _pending; // the unsent rest of a binary frame; goes out before anything else
+        bool _dropping = false;
+        std::chrono::steady_clock::time_point _droppingSince;
         std::string _peer;
         std::mutex _sendMutex;
         std::atomic<bool> _open{true};

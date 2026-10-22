@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Interaction test (SPEC §17): drives interact.html through /api/v1/interact and checks the
 page's reports on /api/v1/events: clicks, keys, text, IME, wheel, then text selection (drag, Ctrl+C,
-double and triple click), then the preview rates (watcher, controller, after take-over and release).
-With a container and its domain directory it also reads the selection highlight from the newest video grain (`docker exec … mxl-bs-grain-reader`, `DOCKER='sudo docker'`
-if needed). Standard library only.
+double and triple click), then a client that stops reading (it must not slow the controller's preview)
+and the preview rates (watcher, controller, after take-over and release). With a container and its
+domain directory it also reads the selection highlight from the newest video grain (`docker exec …
+mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard library only.
 
     interact_test.py [host:port] [container domain-dir]
 """
@@ -16,7 +17,6 @@ import socket
 import struct
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 
@@ -154,14 +154,8 @@ def preview_rates(host, port):
     b = ws_connect(host, port, "/api/v1/interact")
 
     def fps(sock):
-        # Read the other socket too: a client that does not read stalls the preview loop.
-        other = b if sock is a else a
-        drain = threading.Thread(target=ws_read, args=(other, 4))
-        drain.start()
         ws_read(sock, 1)  # frames still queued at the old rate
-        frames = ws_read(sock, 3)[1]
-        drain.join()
-        return frames / 3
+        return ws_read(sock, 3)[1] / 3
 
     watcher = fps(a)
     ws_send(a, {"type": "interact", "enable": True, "take": True})
@@ -183,6 +177,35 @@ def preview_rates(host, port):
     b.close()
 
 
+def metric(host, port, name):
+    with urllib.request.urlopen(f"http://{host}:{port}/metrics", timeout=5) as response:
+        text = response.read().decode()
+    return sum(float(line.split()[-1]) for line in text.splitlines() if line.startswith(f"mxl_browser_source_{name}"))
+
+
+def stuck_client(host, port, observer):
+    """A client that stops reading (`observer`, unread since the start) must not slow the controller's
+    preview: its frames are dropped, and 5 s after its socket filled up the server closes it (SPEC §7.3)."""
+    c = ws_connect(host, port, "/api/v1/interact")
+    ws_send(c, {"type": "interact", "enable": True, "take": True})
+    ws_send(c, {"type": "preview", "fps": 25})
+    ws_read(c, 1)
+    frames, seconds, sessions = 0, 0, 2
+    while seconds < 60 and sessions > 1:  # until only `c` is left
+        frames += ws_read(c, 1)[1]
+        seconds += 1
+        sessions = get_json(host, port, "/api/v1/status")["interact"]["sessions"]
+    rate = frames / seconds
+    dropped = metric(host, port, "preview_frames_dropped_total")
+    print(f"controller {rate:.1f} fps for {seconds} s next to an unread client; {dropped:.0f} frames dropped for it; sessions {sessions}")
+    assert rate >= 15, "the unread client slowed the controller"
+    assert dropped > 0, "no preview frame dropped for the unread client"
+    assert sessions == 1, "the unread client was not closed"
+    print("OK: an unread client does not slow the controller's preview and is closed")
+    observer.close()
+    c.close()
+
+
 def main():
     host, port = (sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8160").split(":")
     port = int(port)
@@ -201,7 +224,6 @@ def main():
     ws_send(observer, {"type": "pointer", "action": "down", "x": 0.15, "y": 0.18, "button": "left", "clicks": 1})
     rejected = [m for m in ws_messages(observer, 1) if m.get("type") == "error"]
     assert rejected and rejected[0]["code"] == "not_controller", rejected
-    observer.close()  # unread, its previews would fill the socket and stall the preview loop
 
     ws_send(control, {"type": "interact", "enable": True})
     ws_send(control, {"type": "focus", "focused": True})
@@ -235,6 +257,7 @@ def main():
     print(f"OK: click, keys, text (ab + ü你), IME (にほ → 日本 committed, テ cancelled), wheel; {len(acks)} acks; within {time.time() - sent:.1f} s")
     selection(host, port, control, events, grains)
     control.close()
+    stuck_client(host, port, observer)
     preview_rates(host, port)
 
 

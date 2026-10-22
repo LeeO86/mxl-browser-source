@@ -326,7 +326,7 @@ The last converted grain buffers are kept. A repeat copies them into the new gra
 
 Endpoint `GET /api/v1/interact` (WebSocket) on `WEB_PORT`. Text frames are JSON; binary frames carry preview images.
 
-Client → server (JSON Schema, draft 2020-12, abbreviated; the full schema is `docs/interact.schema.json`):
+Client → server (JSON Schema, draft 2020-12; the same schema as a file: `docs/interact.schema.json`):
 
 ```json
 {
@@ -387,7 +387,8 @@ Limits: 200 input messages per second per session, 64 KiB per message; beyond th
 The siblings preview with low-rate JPEG (multiviewer `/preview.jpg` at 5 fps and 480 px, test player thumbnail encoded on request). The browser source keeps that mechanism and adds a push path for interaction:
 
 - `GET /api/v1/preview.jpg`: the newest frame, converted after the request arrives (each request gets a ticket and is answered with a preview made for it or a later one; 1.1.0 answered with the previous request's picture), encoded once per preview.
-- Preview frames over the interaction WebSocket at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). A session asks for its rate with `preview` (a watcher can only lower it); the UI asks for 25 when its session gets control and for the default (`preview` without `fps`) when it loses it. The server also drops a session to at most `BROWSER_PREVIEW_FPS` when it loses control (toggle off, take-over, timeout), so only the controller can have more. Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
+- Preview frames over the interaction WebSocket at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). A session asks for its rate with `preview` (a watcher can only lower it); the UI asks for 25 when its session gets control and for the default (`preview` without `fps`) when it loses it. The server also drops a session to at most `BROWSER_PREVIEW_FPS` when it loses control (toggle off, take-over, timeout), so only the controller can have more.
+- A client that stops reading never slows the others. Preview frames are sent without waiting: when a client's socket is full, its frame is dropped (the next one is newer; `preview_frames_dropped_total`), and a frame that has started goes out whole before anything else. Text messages (state, acks, errors) keep their order and are never dropped; they wait at most 5 s for room. A client that takes nothing for 5 s is closed, which ends its control. Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
 - The preview is made from the BGRA frame (downscaled box filter, composited over a checkerboard in the UI when transparent), so it costs nothing when no client watches.
 
 ## 8. NMOS
@@ -686,7 +687,8 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `console_messages_total` | counter | `level` |
 | `interact_sessions` | gauge | – (controlling sessions, 0 or 1) |
 | `interaction_events_total` | counter | `type`, `result` (`ok`, `rejected`, `dropped`) |
-| `preview_frames_total` | counter | – |
+| `preview_frames_total` | counter | – (preview frames sent; until 1.3.1 also those a blocked client never took) |
+| `preview_frames_dropped_total` | counter | – (preview frames dropped because the client's socket was full, §7.3) |
 | `devtools_sessions` | gauge | – |
 | `sender_enabled` | gauge | `sender` |
 | `nmos_registered` | gauge | – |

@@ -10,7 +10,9 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <mutex>
 #include <thread>
+#include <utility>
 
 #include "ops/httpserver.hpp"
 #include "util/net.hpp"
@@ -249,4 +251,130 @@ TEST_CASE("an upload is admitted from its head, at most two at once, within a de
     ::close(again);
     server.stop();
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("WebSocket: a client that stops reading never blocks binary sends; text stays in order; stuck clients are closed")
+{
+    std::shared_ptr<WebSocket> socket;
+    std::mutex mutex;
+    HttpServer server([](HttpRequest const&, HttpResponse& res) { res.status = 404; },
+        [&](HttpRequest const&, HttpResponse&) -> std::optional<WebSocketHandlers> {
+            WebSocketHandlers h;
+            h.open = [&](std::shared_ptr<WebSocket> const& s) {
+                std::lock_guard lock{mutex};
+                socket = s;
+            };
+            return h;
+        });
+    std::string error;
+    REQUIRE(server.start(0, error));
+    auto const connectSmall = [&] {
+        int const fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        int const small = 4096;
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<std::uint16_t>(server.port()));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+        REQUIRE(writeAll(fd, "GET /ws HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                             "Sec-WebSocket-Version: 13\r\n\r\n"));
+        auto const head = readUntil(fd, [](std::string const& d) { return d.find("\r\n\r\n") != std::string::npos; });
+        REQUIRE(head.find("101") != std::string::npos);
+        for (int i = 0; i < 100 && !socket; ++i)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        std::lock_guard lock{mutex};
+        REQUIRE(socket);
+        return std::pair{fd, std::exchange(socket, nullptr)};
+    };
+    std::string const frame(300'000, 'p');
+    // Fills the client's socket; every call returns at once.
+    auto const fill = [&](WebSocket& ws) {
+        int sent = 0;
+        for (int i = 0; i < 1000; ++i)
+        {
+            auto const t0 = std::chrono::steady_clock::now();
+            auto const result = ws.sendBinary(frame);
+            CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(100));
+            if (result == WebSocket::Sent::Dropped)
+            {
+                return sent;
+            }
+            REQUIRE(result == WebSocket::Sent::Yes);
+            ++sent;
+        }
+        FAIL("the socket never filled up");
+        return sent;
+    };
+
+    // Frames that did not fit are dropped; started ones are completed; text follows in order.
+    auto [fd, ws] = connectSmall();
+    int const sent = fill(*ws);
+    CHECK(sent > 0);
+    std::thread text([&] { CHECK(ws->sendText("after")); }); // waits for room, then goes out
+    std::string data;
+    int frames = 0;
+    std::string last;
+    auto const until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (last != "after" && std::chrono::steady_clock::now() < until)
+    {
+        data += readUntil(fd, [](std::string const& d) { return !d.empty(); });
+        while (data.size() >= 2)
+        {
+            auto const* b = reinterpret_cast<unsigned char const*>(data.data());
+            std::size_t len = b[1] & 0x7f;
+            std::size_t header = 2;
+            if (len == 126)
+            {
+                len = (std::size_t{b[2]} << 8) | b[3];
+                header = 4;
+            }
+            else if (len == 127)
+            {
+                len = 0;
+                for (int k = 0; k < 8; ++k)
+                {
+                    len = (len << 8) | b[2 + k];
+                }
+                header = 10;
+            }
+            if (data.size() < header + len)
+            {
+                break;
+            }
+            if ((b[0] & 0x0f) == 0x2)
+            {
+                CHECK(len == frame.size());
+                ++frames;
+            }
+            else
+            {
+                last = data.substr(header, len);
+            }
+            data.erase(0, header + len);
+        }
+    }
+    text.join();
+    CHECK(frames == sent);
+    CHECK(last == "after");
+    CHECK(ws->sendBinary(frame) == WebSocket::Sent::Yes); // reading again: frames flow
+    ::close(fd);
+
+    // A client that takes nothing for kStuckTimeout is closed.
+    auto [stuckFd, stuck] = connectSmall();
+    fill(*stuck);
+    auto const t0 = std::chrono::steady_clock::now();
+    auto result = WebSocket::Sent::Dropped;
+    while (result == WebSocket::Sent::Dropped && std::chrono::steady_clock::now() - t0 < WebSocket::kStuckTimeout * 2)
+    {
+        result = stuck->sendBinary(frame);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    CHECK(result == WebSocket::Sent::Closed);
+    CHECK(std::chrono::steady_clock::now() - t0 >= WebSocket::kStuckTimeout);
+    CHECK(!stuck->open());
+    ::close(stuckFd);
+    server.stop();
 }

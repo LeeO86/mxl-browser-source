@@ -4,6 +4,9 @@
 
 - **Interaction preview at 25 fps** (SPEC §7.3). While a session controlled the page its preview stayed at `BROWSER_PREVIEW_FPS` (10): the server raises a session to 25 only when it asks with `{"type":"preview","fps":25}`, and the UI never asked (also not in 1.2.0). The UI now asks when its session gets control and asks for the default (`{"type":"preview"}`) when it loses it (toggle off, take-over, timeout, reconnect). The server also drops a session that loses control to at most `BROWSER_PREVIEW_FPS`, so a former controller that does not ask cannot keep 25. `BROWSER_PREVIEW_FPS` stays 10.
   - Tests: unit tests for the reset (toggle off, take-over, timeout, `preview` without `fps`), `tests/unit/web/interact.test.mjs` for the UI client (in CI), and preview rates in `tests/integration/interact_test.py`.
+- **A client that stops reading no longer freezes everyone's preview** (SPEC §7.3). WebSocket sends waited without a limit, so one interaction client that stopped reading (a stalled tab, a dead network path) blocked the preview loop for every session. Preview frames are now sent without waiting and dropped for a client whose socket is full (a started frame is finished first); text messages keep their order and wait at most 5 s; a client that takes nothing for 5 s is closed (its control ends). New metric `preview_frames_dropped_total`; `preview_frames_total` now counts only frames that were sent.
+  - Tests: a unit test for the WebSocket (no binary send blocks, text in order after the dropped frames, a stuck client closed after 5 s) and an unread client next to the controller in `tests/integration/interact_test.py`.
+- `docs/interact.schema.json`, the client → server schema of SPEC §7.2 as a file (SPEC pointed to it, but it was missing).
 
 ## 1.3.1
 

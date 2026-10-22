@@ -81,3 +81,11 @@ test("asks again on a new socket after a reconnect", async () => {
   assert.deepEqual(again.previews(), [{ type: "preview", fps: 25 }]);
   client.close();
 });
+
+test("the preview messages are in docs/interact.schema.json", () => {
+  const schema = JSON.parse(readFileSync(new URL("../../../docs/interact.schema.json", import.meta.url), "utf8"));
+  const preview = schema.oneOf.find((s) => s.properties.type.const === "preview");
+  assert.ok(preview, "no preview message in the schema");
+  assert.deepEqual(preview.required, ["type"], "fps must be optional (omitted: the default)");
+  assert.ok(preview.properties.fps.maximum >= 25);
+});

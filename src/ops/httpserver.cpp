@@ -66,6 +66,58 @@ namespace mbs::ops
             return header;
         }
 
+        // Writes what fits now; the number of bytes written, or -1 on an error.
+        long long sendNow(int fd, std::string_view data)
+        {
+            std::size_t off = 0;
+            while (off < data.size())
+            {
+                ssize_t const n = ::send(fd, data.data() + off, data.size() - off, MSG_NOSIGNAL | MSG_DONTWAIT);
+                if (n < 0 && errno == EINTR)
+                {
+                    continue;
+                }
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                {
+                    break;
+                }
+                if (n <= 0)
+                {
+                    return -1;
+                }
+                off += static_cast<std::size_t>(n);
+            }
+            return static_cast<long long>(off);
+        }
+
+        // Writes all of `data` before `deadline`.
+        bool writeBy(int fd, std::string_view data, std::chrono::steady_clock::time_point deadline)
+        {
+            while (true)
+            {
+                auto const n = sendNow(fd, data);
+                if (n < 0)
+                {
+                    return false;
+                }
+                data.remove_prefix(static_cast<std::size_t>(n));
+                if (data.empty())
+                {
+                    return true;
+                }
+                auto const left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+                if (left <= 0)
+                {
+                    return false;
+                }
+                pollfd pfd{fd, POLLOUT, 0};
+                if (::poll(&pfd, 1, static_cast<int>(left)) < 0 && errno != EINTR)
+                {
+                    return false;
+                }
+            }
+        }
+
         std::string statusText(int status)
         {
             switch (status)
@@ -214,13 +266,38 @@ namespace mbs::ops
         {
             return false;
         }
-        if (!writeAll(_fd, frameHeader(opcode, payload.size())) || !writeAll(_fd, payload))
+        // In order and complete: the rest of a binary frame first, then this one, within the timeout.
+        auto const deadline = std::chrono::steady_clock::now() + kStuckTimeout;
+        if (!writeBy(_fd, _pending, deadline) || !writeBy(_fd, frameHeader(opcode, payload.size()) + std::string(payload), deadline))
         {
-            _open.store(false);
-            ::shutdown(_fd, SHUT_RDWR);
+            fail();
             return false;
         }
+        _pending.clear();
+        _dropping = false;
         return true;
+    }
+
+    void WebSocket::fail()
+    {
+        _open.store(false);
+        ::shutdown(_fd, SHUT_RDWR);
+    }
+
+    WebSocket::Sent WebSocket::dropped()
+    {
+        auto const now = std::chrono::steady_clock::now();
+        if (!_dropping)
+        {
+            _dropping = true;
+            _droppingSince = now;
+        }
+        else if (now - _droppingSince >= kStuckTimeout)
+        {
+            fail();
+            return Sent::Closed;
+        }
+        return Sent::Dropped;
     }
 
     bool WebSocket::sendText(std::string_view text)
@@ -228,9 +305,45 @@ namespace mbs::ops
         return send(0x1, text);
     }
 
-    bool WebSocket::sendBinary(std::string_view data)
+    WebSocket::Sent WebSocket::sendBinary(std::string_view data)
     {
-        return send(0x2, data);
+        std::unique_lock lock{_sendMutex, std::try_to_lock};
+        if (!lock.owns_lock())
+        {
+            return _open.load() ? Sent::Dropped : Sent::Closed; // a text send is waiting for room
+        }
+        if (!_open.load())
+        {
+            return Sent::Closed;
+        }
+        if (!_pending.empty())
+        {
+            auto const n = sendNow(_fd, _pending);
+            if (n < 0)
+            {
+                fail();
+                return Sent::Closed;
+            }
+            _pending.erase(0, static_cast<std::size_t>(n));
+            if (!_pending.empty())
+            {
+                return dropped();
+            }
+        }
+        std::string frame = frameHeader(0x2, data.size()) + std::string(data);
+        auto const n = sendNow(_fd, frame);
+        if (n < 0)
+        {
+            fail();
+            return Sent::Closed;
+        }
+        if (n == 0)
+        {
+            return dropped();
+        }
+        _pending = frame.substr(static_cast<std::size_t>(n)); // started frames are finished
+        _dropping = false;
+        return Sent::Yes;
     }
 
     void WebSocket::close(int code)
@@ -243,8 +356,11 @@ namespace mbs::ops
         std::string payload;
         payload.push_back(static_cast<char>((code >> 8) & 0xff));
         payload.push_back(static_cast<char>(code & 0xff));
-        writeAll(_fd, frameHeader(0x8, payload.size()));
-        writeAll(_fd, payload);
+        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        if (writeBy(_fd, _pending, deadline))
+        {
+            writeBy(_fd, frameHeader(0x8, payload.size()) + payload, deadline);
+        }
         ::shutdown(_fd, SHUT_RDWR);
     }
 
