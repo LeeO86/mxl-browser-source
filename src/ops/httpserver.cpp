@@ -66,6 +66,31 @@ namespace mbs::ops
             return header;
         }
 
+        // Writes what fits now; the number of bytes written, or -1 on an error.
+        long long sendNow(int fd, std::string_view data)
+        {
+            std::size_t off = 0;
+            while (off < data.size())
+            {
+                ssize_t const n = ::send(fd, data.data() + off, data.size() - off, MSG_NOSIGNAL | MSG_DONTWAIT);
+                if (n < 0 && errno == EINTR)
+                {
+                    continue;
+                }
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                {
+                    break;
+                }
+                if (n <= 0)
+                {
+                    return -1;
+                }
+                off += static_cast<std::size_t>(n);
+            }
+            return static_cast<long long>(off);
+        }
+
+
         std::string statusText(int status)
         {
             switch (status)
@@ -214,13 +239,75 @@ namespace mbs::ops
         {
             return false;
         }
-        if (!writeAll(_fd, frameHeader(opcode, payload.size())) || !writeAll(_fd, payload))
+        auto const now = Clock::now();
+        _outbox.push_back({frameHeader(opcode, payload.size()) + std::string(payload), 0, now});
+        _outboxBytes += _outbox.back().bytes.size();
+        if (_outboxBytes > kOutboxBytes)
         {
-            _open.store(false);
-            ::shutdown(_fd, SHUT_RDWR);
+            fail();
             return false;
         }
-        return true;
+        flushLocked(now);
+        return _open.load();
+    }
+
+    bool WebSocket::flush()
+    {
+        std::lock_guard lock{_sendMutex};
+        if (_open.load() && !_outbox.empty())
+        {
+            flushLocked(Clock::now());
+        }
+        return _open.load() && !_outbox.empty();
+    }
+
+    void WebSocket::fail()
+    {
+        _open.store(false);
+        ::shutdown(_fd, SHUT_RDWR);
+        _outbox.clear(); // not kept until the last reference goes
+        _outboxBytes = 0;
+    }
+
+    void WebSocket::flushLocked(Clock::time_point now)
+    {
+        while (!_outbox.empty())
+        {
+            auto& frame = _outbox.front();
+            auto const n = sendNow(_fd, std::string_view(frame.bytes).substr(frame.sent));
+            if (n < 0)
+            {
+                fail();
+                return;
+            }
+            frame.sent += static_cast<std::size_t>(n);
+            _outboxBytes -= static_cast<std::size_t>(n);
+            if (frame.sent < frame.bytes.size())
+            {
+                break; // the socket is full
+            }
+            _outbox.pop_front();
+            _dropping = false; // the client reads
+        }
+        if (!_outbox.empty() && now - _outbox.front().queued >= kStuckTimeout)
+        {
+            fail();
+        }
+    }
+
+    WebSocket::Sent WebSocket::dropped(Clock::time_point now)
+    {
+        if (!_dropping)
+        {
+            _dropping = true;
+            _droppingSince = now;
+        }
+        else if (now - _droppingSince >= kStuckTimeout)
+        {
+            fail();
+            return Sent::Closed;
+        }
+        return Sent::Dropped;
     }
 
     bool WebSocket::sendText(std::string_view text)
@@ -228,24 +315,56 @@ namespace mbs::ops
         return send(0x1, text);
     }
 
-    bool WebSocket::sendBinary(std::string_view data)
+    WebSocket::Sent WebSocket::sendBinary(std::string_view data)
     {
-        return send(0x2, data);
+        std::lock_guard lock{_sendMutex};
+        auto const now = Clock::now();
+        if (_open.load())
+        {
+            flushLocked(now);
+        }
+        if (!_open.load())
+        {
+            return Sent::Closed;
+        }
+        if (!_outbox.empty())
+        {
+            return dropped(now); // the socket is full
+        }
+        std::string frame = frameHeader(0x2, data.size()) + std::string(data);
+        auto const n = sendNow(_fd, frame);
+        if (n < 0)
+        {
+            fail();
+            return Sent::Closed;
+        }
+        if (n == 0)
+        {
+            return dropped(now);
+        }
+        if (static_cast<std::size_t>(n) < frame.size())
+        {
+            // A started frame is finished before anything else.
+            _outbox.push_back({std::move(frame), static_cast<std::size_t>(n), now});
+            _outboxBytes += _outbox.back().bytes.size() - _outbox.back().sent;
+        }
+        _dropping = false;
+        return Sent::Yes;
     }
 
     void WebSocket::close(int code)
     {
         std::lock_guard lock{_sendMutex};
-        if (!_open.exchange(false))
+        if (!_open.load())
         {
             return;
         }
         std::string payload;
         payload.push_back(static_cast<char>((code >> 8) & 0xff));
         payload.push_back(static_cast<char>(code & 0xff));
-        writeAll(_fd, frameHeader(0x8, payload.size()));
-        writeAll(_fd, payload);
-        ::shutdown(_fd, SHUT_RDWR);
+        _outbox.push_back({frameHeader(0x8, payload.size()) + payload, 0, Clock::now()});
+        flushLocked(Clock::now()); // what fits now; the rest is lost with the connection
+        fail();
     }
 
     struct HttpServer::Impl
@@ -631,15 +750,17 @@ namespace mbs::ops
                 }
                 if (!progressed || buffer.size() < 2)
                 {
+                    // This thread also drains the socket's outbox (sends never block their callers).
                     pollfd pfd{};
                     pfd.fd = fd;
-                    pfd.events = POLLIN;
+                    pfd.events = static_cast<short>(POLLIN | (socket->flush() ? POLLOUT : 0));
                     int const rc = ::poll(&pfd, 1, 200);
-                    if (rc < 0)
+                    if (rc < 0 && errno != EINTR)
                     {
                         break;
                     }
-                    if (rc == 0)
+                    socket->flush(); // also closes a socket whose oldest frame waited too long
+                    if ((pfd.revents & (POLLIN | POLLHUP | POLLERR)) == 0)
                     {
                         continue;
                     }

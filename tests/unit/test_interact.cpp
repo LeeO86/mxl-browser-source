@@ -215,4 +215,36 @@ TEST_CASE("preview rates: watchers up to the default, the controller up to 25")
     hub.message(id, R"({"type":"interact","enable":true})");
     hub.message(id, R"({"type":"preview","fps":25})");
     CHECK(hub.previewRates().at(id) == 25);
+    hub.message(id, R"({"type":"preview"})"); // no fps: back to the default
+    CHECK(hub.previewRates().at(id) == 10);
+}
+
+TEST_CASE("preview rates: losing control drops the controller's rate to the default")
+{
+    FakePage page;
+    InteractHub hub(settings(), page);
+    Client a;
+    Client b;
+    int const ida = hub.open(a.peer());
+    int const idb = hub.open(b.peer());
+    auto const fast = [&](int id) {
+        hub.message(id, R"({"type":"interact","enable":true,"take":true})");
+        hub.message(id, R"({"type":"preview","fps":25})");
+        CHECK(hub.previewRates().at(id) == 25);
+    };
+
+    fast(ida);
+    hub.message(ida, R"({"type":"interact","enable":false})"); // toggle off
+    CHECK(hub.previewRates().at(ida) == 10);
+
+    fast(ida);
+    fast(idb); // take-over
+    CHECK(hub.previewRates().at(ida) == 10);
+    CHECK(hub.previewRates().at(idb) == 25);
+    hub.message(ida, R"({"type":"preview","fps":25})"); // a watcher cannot raise it again
+    CHECK(hub.previewRates().at(ida) == 10);
+
+    hub.tick(InteractHub::Clock::now() + std::chrono::seconds(121)); // timeout
+    CHECK(!hub.controlled());
+    CHECK(hub.previewRates().at(idb) == 10);
 }

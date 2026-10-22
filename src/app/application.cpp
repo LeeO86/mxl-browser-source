@@ -1540,11 +1540,20 @@ namespace mbs::app
                     }
                 }
             }
+            // Never blocks: a client whose socket is full misses this frame (SPEC §7.3).
+            int sent = 0;
+            int dropped = 0;
             for (auto const& socket : targets)
             {
-                socket->sendBinary(frame);
+                auto const result = socket->sendBinary(frame);
+                sent += result == ops::WebSocket::Sent::Yes ? 1 : 0;
+                dropped += result == ops::WebSocket::Sent::Dropped ? 1 : 0;
             }
-            _metrics.inc("preview_frames_total", {}, static_cast<double>(targets.size()));
+            _metrics.inc("preview_frames_total", {}, static_cast<double>(sent));
+            if (dropped > 0)
+            {
+                _metrics.inc("preview_frames_dropped_total", {}, static_cast<double>(dropped));
+            }
         }
     }
 

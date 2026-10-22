@@ -178,7 +178,8 @@ Client → server (JSON text frames):
 {"type":"ime","action":"composition","text":"にほ","selection":[2,2]}
 {"type":"ime","action":"commit","text":"日本"}
 {"type":"focus","focused":true}
-{"type":"preview","fps":10,"width":960}
+{"type":"preview","fps":25}
+{"type":"preview"}
 ```
 
 Server → client:
@@ -193,7 +194,7 @@ Server → client:
 {"type":"error","code":"not_controller","message":"interaction is off for this session"}
 ```
 
-Binary frames: 8-byte little-endian grain index, then a JPEG (the preview). `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down). A `down` focuses the page; the buttons that are down ride on every `move` until their `up` (a drag selects text), and `leave` or the end of control sends the `up` of a button still down.
+Binary frames: 8-byte little-endian grain index, then a JPEG (the preview), at `BROWSER_PREVIEW_FPS`. `preview` sets this session's rate: up to 25 while it controls the page, else up to `BROWSER_PREVIEW_FPS`; without `fps` it goes back to `BROWSER_PREVIEW_FPS`. Losing control drops the rate to at most `BROWSER_PREVIEW_FPS`. The UI asks for 25 while it controls the page. A client that does not keep up misses preview frames (never text messages); one that reads nothing for 5 s is closed. Schema: `docs/interact.schema.json`. `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down). A `down` focuses the page; the buttons that are down ride on every `move` until their `up` (a drag selects text), and `leave` or the end of control sends the `up` of a button still down.
 
 ## DevTools (`BROWSER_DEVTOOLS=true` only)
 

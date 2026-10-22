@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LeeO86/mxl-browser-source/docs/interact.schema.json",
+  "title": "mxl-browser-source /api/v1/interact, client to server (SPEC §7.2)",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "client": {
+          "type": "string"
+        },
+        "protocol": {
+          "const": 1
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "enable"
+      ],
+      "properties": {
+        "type": {
+          "const": "interact"
+        },
+        "enable": {
+          "type": "boolean"
+        },
+        "take": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "action",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "type": {
+          "const": "pointer"
+        },
+        "action": {
+          "enum": [
+            "move",
+            "down",
+            "up",
+            "leave"
+          ]
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "button": {
+          "enum": [
+            "left",
+            "middle",
+            "right"
+          ]
+        },
+        "clicks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "modifiers": {
+          "$ref": "#/$defs/modifiers"
+        },
+        "seq": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "x",
+        "y",
+        "dx",
+        "dy"
+      ],
+      "properties": {
+        "type": {
+          "const": "wheel"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "dx": {
+          "type": "number"
+        },
+        "dy": {
+          "type": "number",
+          "description": "pixels, DOM sign: positive scrolls down (dx: right)"
+        },
+        "modifiers": {
+          "$ref": "#/$defs/modifiers"
+        },
+        "seq": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "action",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "const": "key"
+        },
+        "action": {
+          "enum": [
+            "down",
+            "up"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "description": "KeyboardEvent.code, e.g. KeyA"
+        },
+        "key": {
+          "type": "string",
+          "description": "KeyboardEvent.key, e.g. a"
+        },
+        "repeat": {
+          "type": "boolean"
+        },
+        "modifiers": {
+          "$ref": "#/$defs/modifiers"
+        },
+        "seq": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "action"
+      ],
+      "properties": {
+        "type": {
+          "const": "ime"
+        },
+        "action": {
+          "enum": [
+            "composition",
+            "commit",
+            "finish",
+            "cancel"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "selection": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "focused"
+      ],
+      "properties": {
+        "type": {
+          "const": "focus"
+        },
+        "focused": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "preview"
+        },
+        "fps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25,
+          "description": "omitted: back to BROWSER_PREVIEW_FPS"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 160,
+          "maximum": 1920
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "modifiers": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "shift",
+          "ctrl",
+          "alt",
+          "meta",
+          "capslock"
+        ]
+      },
+      "uniqueItems": true
+    }
+  }
+}

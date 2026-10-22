@@ -6,7 +6,9 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -41,7 +43,14 @@ namespace mbs::ops
         std::vector<std::pair<std::string, std::string>> headers;
     };
 
-    /// One WebSocket connection. Sends are thread-safe; a failed send closes the socket.
+    /// One WebSocket connection. Sends are thread-safe, never block the caller and never write
+    /// half a frame between others; a failed send closes the socket.
+    /// Text and control frames are written at once when the socket has room, else they wait in
+    /// order in an outbox that the connection's thread drains. The socket is closed when the
+    /// outbox holds more than kOutboxBytes or its oldest frame is older than kStuckTimeout.
+    /// Binary frames (previews) are dropped instead of queued when the socket is full (the next
+    /// one is newer); one that has started is finished first. A client that takes no binary
+    /// frame for kStuckTimeout is closed too.
     class WebSocket
     {
     public:
@@ -50,8 +59,19 @@ namespace mbs::ops
         WebSocket(WebSocket const&) = delete;
         WebSocket& operator=(WebSocket const&) = delete;
 
+        static constexpr std::chrono::milliseconds kStuckTimeout{5000};
+        static constexpr std::size_t kOutboxBytes = 4 * 1024 * 1024;
+
+        enum class Sent
+        {
+            Yes,
+            Dropped, // the client's socket is full
+            Closed,
+        };
+
+        /// Queues the message; false when the socket is (or got) closed.
         bool sendText(std::string_view text);
-        bool sendBinary(std::string_view data);
+        Sent sendBinary(std::string_view data);
         /// Sends a close frame and shuts the socket down; the reader thread ends.
         void close(int code = 1000);
         [[nodiscard]] bool open() const { return _open.load(); }
@@ -59,9 +79,27 @@ namespace mbs::ops
 
     private:
         friend class HttpServer;
+        using Clock = std::chrono::steady_clock;
+        struct Frame
+        {
+            std::string bytes;
+            std::size_t sent = 0;
+            Clock::time_point queued;
+        };
+
         bool send(unsigned opcode, std::string_view payload);
+        /// For the connection's thread: writes what the outbox can; true while it still holds data.
+        bool flush();
+        // With _sendMutex held:
+        void fail();
+        void flushLocked(Clock::time_point now);
+        Sent dropped(Clock::time_point now); // counts towards kStuckTimeout
 
         int _fd;
+        std::deque<Frame> _outbox;
+        std::size_t _outboxBytes = 0;
+        bool _dropping = false;
+        Clock::time_point _droppingSince;
         std::string _peer;
         std::mutex _sendMutex;
         std::atomic<bool> _open{true};

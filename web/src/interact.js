@@ -5,6 +5,7 @@ import { wsUrl } from "./api.js";
 
 const LINE_PX = 40; // wheel deltaMode 1 (lines) → pixels
 const ACK_TIMEOUT_MS = 10000; // forget a seq that was never acknowledged
+const CONTROL_PREVIEW_FPS = 25; // preview rate while this session controls the page (SPEC §7.3)
 
 /** Modifier list of a keyboard, mouse or wheel event. */
 export function modifiersOf(e) {
@@ -44,6 +45,7 @@ export class InteractClient {
     this.retry = 0;
     this.timer = 0;
     this.closed = false;
+    this.fastPreview = false; // asked for CONTROL_PREVIEW_FPS on this socket
   }
 
   connect() {
@@ -52,6 +54,7 @@ export class InteractClient {
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       this.retry = 0;
+      this.fastPreview = false; // a new session starts at the server's default
       this.send({ type: "hello", client: "ui", protocol: 1 });
       this.h.open?.(true);
     };
@@ -98,6 +101,15 @@ export class InteractClient {
     return true;
   }
 
+  /**
+   * Preview rate for the control state: CONTROL_PREVIEW_FPS while this session
+   * controls the page, else the server's default (`preview` without `fps`).
+   */
+  previewRate(controlling) {
+    if (controlling === this.fastPreview) return;
+    if (this.send(controlling ? { type: "preview", fps: CONTROL_PREVIEW_FPS } : { type: "preview" })) this.fastPreview = controlling;
+  }
+
   /** Text in chunks of at most 4096 characters (schema maxLength). */
   sendText(text) {
     const chars = Array.from(text);
@@ -122,6 +134,7 @@ export class InteractClient {
     }
     switch (msg.type) {
       case "state":
+        if (msg.interact) this.previewRate(!!msg.interact.enabled && msg.interact.controller === "self");
         this.h.state?.(msg);
         break;
       case "ack": {

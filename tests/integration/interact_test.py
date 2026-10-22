@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Interaction test (SPEC §17): drives interact.html through /api/v1/interact and checks the
 page's reports on /api/v1/events: clicks, keys, text, IME, wheel, then text selection (drag, Ctrl+C,
-double and triple click). With a container and its domain directory it also reads the selection
-highlight from the newest video grain (`docker exec … mxl-bs-grain-reader`, `DOCKER='sudo docker'`
-if needed). Standard library only.
+double and triple click), then a client that stops reading (it must not slow the controller's preview)
+and the preview rates (watcher, controller, after take-over and release). With a container and its
+domain directory it also reads the selection highlight from the newest video grain (`docker exec …
+mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard library only.
 
     interact_test.py [host:port] [container domain-dir]
 """
@@ -48,7 +49,12 @@ _partial = {}  # socket -> bytes of a frame that had not fully arrived when ws_m
 
 def ws_messages(sock, seconds):
     """Text messages received within `seconds` (binary frames are skipped)."""
-    out, buf = [], _partial.pop(sock, b"")
+    return ws_read(sock, seconds)[0]
+
+
+def ws_read(sock, seconds):
+    """Text messages and the number of binary frames (previews) received within `seconds`."""
+    out, frames, buf = [], 0, _partial.pop(sock, b"")
     end = time.time() + seconds
     sock.settimeout(0.2)
     while time.time() < end:
@@ -74,8 +80,10 @@ def ws_messages(sock, seconds):
             payload, buf = buf[offset:offset + length], buf[offset + length:]
             if opcode == 0x1:
                 out.append(json.loads(payload))
+            elif opcode == 0x2:
+                frames += 1
     _partial[sock] = buf
-    return out
+    return out, frames
 
 
 def get_json(host, port, path):
@@ -139,6 +147,64 @@ def selection(host, port, control, events, grains):
     print(f"OK: drag selected and Ctrl+C copied {text!r}{', highlight in the grain' if grains else ''}; double click {word[-1]!r}, triple click the line")
 
 
+def preview_rates(host, port):
+    """SPEC §7.3: a watcher gets BROWSER_PREVIEW_FPS (10), the controller up to 25 when it asks; the
+    higher rate ends with control (toggle off, take-over), also when the session does not ask."""
+    a = ws_connect(host, port, "/api/v1/interact")
+    b = ws_connect(host, port, "/api/v1/interact")
+
+    def fps(sock):
+        ws_read(sock, 1)  # frames still queued at the old rate
+        return ws_read(sock, 3)[1] / 3
+
+    watcher = fps(a)
+    ws_send(a, {"type": "interact", "enable": True, "take": True})
+    ws_send(a, {"type": "preview", "fps": 25})
+    controller = fps(a)
+    ws_send(b, {"type": "interact", "enable": True, "take": True})
+    ws_send(b, {"type": "preview", "fps": 25})
+    taken_over = fps(a)
+    ws_send(b, {"type": "interact", "enable": False})  # no reset message: the server drops the rate itself
+    released = fps(b)
+    rates = f"watcher {watcher:.1f}, controller {controller:.1f}, after take-over {taken_over:.1f}, after release {released:.1f} fps"
+    assert 7 <= watcher <= 12, rates
+    assert controller >= 15, rates
+    assert 7 <= taken_over <= 12, rates
+    assert 7 <= released <= 12, rates
+    print(f"OK: preview {rates}")
+    a.close()
+    b.close()
+
+
+def metric(host, port, name):
+    with urllib.request.urlopen(f"http://{host}:{port}/metrics", timeout=5) as response:
+        text = response.read().decode()
+    return sum(float(line.split()[-1]) for line in text.splitlines() if line.startswith(f"mxl_browser_source_{name}"))
+
+
+def stuck_client(host, port, observer):
+    """A client that stops reading (`observer`, unread since the start) must not slow the controller's
+    preview: its frames are dropped, and 5 s after its socket filled up the server closes it (SPEC §7.3)."""
+    c = ws_connect(host, port, "/api/v1/interact")
+    ws_send(c, {"type": "interact", "enable": True, "take": True})
+    ws_send(c, {"type": "preview", "fps": 25})
+    ws_read(c, 1)
+    frames, seconds, sessions = 0, 0, 2
+    while seconds < 60 and sessions > 1:  # until only `c` is left
+        frames += ws_read(c, 1)[1]
+        seconds += 1
+        sessions = get_json(host, port, "/api/v1/status")["interact"]["sessions"]
+    rate = frames / seconds
+    dropped = metric(host, port, "preview_frames_dropped_total")
+    print(f"controller {rate:.1f} fps for {seconds} s next to an unread client; {dropped:.0f} frames dropped for it; sessions {sessions}")
+    assert rate >= 15, "the unread client slowed the controller"
+    assert dropped > 0, "no preview frame dropped for the unread client"
+    assert sessions == 1, "the unread client was not closed"
+    print("OK: an unread client does not slow the controller's preview and is closed")
+    observer.close()
+    c.close()
+
+
 def main():
     host, port = (sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8160").split(":")
     port = int(port)
@@ -189,6 +255,9 @@ def main():
     assert wheels and wheels[-1]["wheel"] == 1, f"wheel down not reported: {wheels}"
     print(f"OK: click, keys, text (ab + ü你), IME (にほ → 日本 committed, テ cancelled), wheel; {len(acks)} acks; within {time.time() - sent:.1f} s")
     selection(host, port, control, events, grains)
+    control.close()
+    stuck_client(host, port, observer)
+    preview_rates(host, port)
 
 
 if __name__ == "__main__":
