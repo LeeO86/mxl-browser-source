@@ -265,6 +265,8 @@ namespace mbs::ops
     {
         _open.store(false);
         ::shutdown(_fd, SHUT_RDWR);
+        _outbox.clear(); // not kept until the last reference goes
+        _outboxBytes = 0;
     }
 
     void WebSocket::flushLocked(Clock::time_point now)
@@ -362,8 +364,7 @@ namespace mbs::ops
         payload.push_back(static_cast<char>(code & 0xff));
         _outbox.push_back({frameHeader(0x8, payload.size()) + payload, 0, Clock::now()});
         flushLocked(Clock::now()); // what fits now; the rest is lost with the connection
-        _open.store(false);
-        ::shutdown(_fd, SHUT_RDWR);
+        fail();
     }
 
     struct HttpServer::Impl
@@ -754,7 +755,7 @@ namespace mbs::ops
                     pfd.fd = fd;
                     pfd.events = static_cast<short>(POLLIN | (socket->flush() ? POLLOUT : 0));
                     int const rc = ::poll(&pfd, 1, 200);
-                    if (rc < 0)
+                    if (rc < 0 && errno != EINTR)
                     {
                         break;
                     }

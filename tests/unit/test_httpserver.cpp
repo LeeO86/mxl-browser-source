@@ -282,8 +282,15 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
                              "Sec-WebSocket-Version: 13\r\n\r\n"));
         auto const head = readUntil(fd, [](std::string const& d) { return d.find("\r\n\r\n") != std::string::npos; });
         REQUIRE(head.find("101") != std::string::npos);
-        for (int i = 0; i < 100 && !socket; ++i)
+        for (int i = 0; i < 100; ++i)
         {
+            {
+                std::lock_guard lock{mutex};
+                if (socket)
+                {
+                    break;
+                }
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         std::lock_guard lock{mutex};
