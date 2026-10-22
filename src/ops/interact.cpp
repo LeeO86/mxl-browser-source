@@ -146,6 +146,11 @@ namespace mbs::ops
         if (_controller != id)
         {
             releaseButtons(actions);
+            // The controller's higher preview rate ends with control (SPEC §7.3).
+            if (auto const old = _sessions.find(_controller); old != _sessions.end())
+            {
+                old->second.previewFps = std::min(old->second.previewFps, _settings.previewFps);
+            }
             _controller = id;
         }
     }

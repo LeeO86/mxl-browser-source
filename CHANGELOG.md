@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (planned 1.3.2)
+
+- **Interaction preview at 25 fps** (SPEC §7.3). While a session controlled the page its preview stayed at `BROWSER_PREVIEW_FPS` (10): the server raises a session to 25 only when it asks with `{"type":"preview","fps":25}`, and the UI never asked (also not in 1.2.0). The UI now asks when its session gets control and asks for the default (`{"type":"preview"}`) when it loses it (toggle off, take-over, timeout, reconnect). The server also drops a session that loses control to at most `BROWSER_PREVIEW_FPS`, so a former controller that does not ask cannot keep 25. `BROWSER_PREVIEW_FPS` stays 10.
+  - Tests: unit tests for the reset (toggle off, take-over, timeout, `preview` without `fps`), `tests/unit/web/interact.test.mjs` for the UI client (in CI), and preview rates in `tests/integration/interact_test.py`.
+
 ## 1.3.1
 
 - **Service and shared workers and the URL policy** (SPEC §14.3). CEF gives the requests of a service or shared worker no browser, so they reached none of the URL policy's handlers: a page could register a service worker that fetched loopback, the function's own ports, the registry or hosts outside `BROWSER_URL_ALLOW`, and in mode `ograf` anything despite `BROWSER_OGRAF_NETWORK=local` (lab, 1.3.0: all went through, `navigation_blocked_total` did not count them). The 1.3.0 release notes listed this as a known limitation.

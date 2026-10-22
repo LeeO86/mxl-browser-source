@@ -360,7 +360,8 @@ Client → server (JSON Schema, draft 2020-12, abbreviated; the full schema is `
     {"type": "object", "required": ["type", "focused"], "properties": {
       "type": {"const": "focus"}, "focused": {"type": "boolean"}}},
     {"type": "object", "required": ["type"], "properties": {
-      "type": {"const": "preview"}, "fps": {"type": "integer", "minimum": 1, "maximum": 25},
+      "type": {"const": "preview"},
+      "fps": {"type": "integer", "minimum": 1, "maximum": 25, "description": "omitted: back to BROWSER_PREVIEW_FPS"},
       "width": {"type": "integer", "minimum": 160, "maximum": 1920}}}
   ],
   "$defs": {"modifiers": {"type": "array", "items": {"enum": ["shift", "ctrl", "alt", "meta", "capslock"]}, "uniqueItems": true}}
@@ -386,7 +387,7 @@ Limits: 200 input messages per second per session, 64 KiB per message; beyond th
 The siblings preview with low-rate JPEG (multiviewer `/preview.jpg` at 5 fps and 480 px, test player thumbnail encoded on request). The browser source keeps that mechanism and adds a push path for interaction:
 
 - `GET /api/v1/preview.jpg`: the newest frame, converted after the request arrives (each request gets a ticket and is answered with a preview made for it or a later one; 1.1.0 answered with the previous request's picture), encoded once per preview.
-- Preview frames over the interaction WebSocket at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
+- Preview frames over the interaction WebSocket at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). A session asks for its rate with `preview` (a watcher can only lower it); the UI asks for 25 when its session gets control and for the default (`preview` without `fps`) when it loses it. The server also drops a session to at most `BROWSER_PREVIEW_FPS` when it loses control (toggle off, take-over, timeout), so only the controller can have more. Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
 - The preview is made from the BGRA frame (downscaled box filter, composited over a checkerboard in the UI when transparent), so it costs nothing when no client watches.
 
 ## 8. NMOS

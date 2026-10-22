@@ -56,7 +56,7 @@ The most used settings (all of them, with defaults and "restart required" marker
 
 The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
-The preview on the Source page is the interaction window: back, forward and reload, and with "Interact" on, mouse (drag to select text, double and triple click), keys, text and IME go to the page.
+The preview on the Source page is the interaction window: back, forward and reload, and with "Interact" on, mouse (drag to select text, double and triple click), keys, text and IME go to the page and the preview runs at 25 fps instead of `BROWSER_PREVIEW_FPS`.
 
 Operator screens can frame the interaction window as a widget: `GET /widgets` lists it (`interaction`, no parameters, `min_size` 640×400) and `GET /widget/interaction[?theme=dark|light|transparent]` is the page. It talks only to this instance's own origin (REST and both WebSockets on `WEB_PORT`), asks for `BROWSER_API_TOKEN` when one is set, and posts `widget-ready` and `widget-size` to its parent. Only the pages that `WIDGET_FRAME_ANCESTORS` names may frame it; on the platform set it to `'self' https://designer.<fqdn>`.
 
