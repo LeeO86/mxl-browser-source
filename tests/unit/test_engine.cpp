@@ -844,6 +844,7 @@ TEST_CASE("the trace rings are copied while writers keep writing, without a lock
 {
     util::TraceRing<engine::AudioTraceEvent> ring(256);
     std::atomic<bool> stop{false};
+    std::atomic<std::int64_t> recorded{0};
     std::vector<std::thread> writers;
     for (int w = 0; w < 2; ++w)
     {
@@ -854,9 +855,18 @@ TEST_CASE("the trace rings are copied while writers keep writing, without a lock
                 // Every field carries the same number, so a torn copy would show.
                 ring.record({static_cast<std::uint64_t>(n + 1), engine::AudioTraceKind::Packet, w, n, n, n, n});
                 ++n;
+                recorded.fetch_add(1);
             }
         });
     }
+    // Copy only once the writers run and the ring is full: on a busy CI runner they may not have
+    // started yet when the loop below begins (copied == 0 then).
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (recorded.load() < 256 && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(recorded.load() >= 256);
     std::size_t copied = 0;
     for (int i = 0; i < 200; ++i)
     {
@@ -877,6 +887,12 @@ TEST_CASE("the trace rings are copied while writers keep writing, without a lock
         t.join();
     }
     CHECK(copied > 0);
+    // Two writers that lap the ring can leave a slot with the older of two events for it, which a
+    // snapshot skips (255 then). One quiet pass of a single writer fills every slot in order.
+    for (std::int64_t n = 0; n < 256; ++n)
+    {
+        ring.record({static_cast<std::uint64_t>(n + 1), engine::AudioTraceKind::Packet, 0, n, n, n, n});
+    }
     auto const last = ring.snapshot();
     CHECK(last.size() == 256); // quiet: every slot complete
 }
