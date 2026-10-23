@@ -20,6 +20,7 @@
 #include "mxlio/flowdef.hpp"
 #include "mxlio/setup.hpp"
 #include "nmos/node.hpp"
+#include "ops/counters.hpp"
 #include "picojson/picojson.h"
 #include "util/logging.hpp"
 #include "util/net.hpp"
@@ -173,6 +174,7 @@ namespace mbs::app
     {
         ::pipe2(gSignalPipe, O_CLOEXEC);
         installSignalHandlers();
+        ops::startCounters(_metrics, _cfg.audioChannels > 0);
 
         prepareState();
         // A busy port fails here, before the own domain and CEF exist: nothing is left behind,

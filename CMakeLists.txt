@@ -53,6 +53,7 @@ add_library(mbs-core STATIC
     src/ograf/manifest.cpp
     src/ograf/serverapi.cpp
     src/ograf/zip.cpp
+    src/ops/counters.cpp
     src/ops/httpserver.cpp
     src/ops/interact.cpp
     src/ops/keymap.cpp
@@ -79,6 +80,7 @@ if(MBS_BUILD_TESTS)
         tests/unit/test_audio.cpp
         tests/unit/test_config.cpp
         tests/unit/test_convert.cpp
+        tests/unit/test_counters.cpp
         tests/unit/test_engine.cpp
         tests/unit/test_frameclock.cpp
         tests/unit/test_framestore.cpp

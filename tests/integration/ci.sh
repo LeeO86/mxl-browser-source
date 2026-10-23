@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # The integration tests of SPEC §17 against an image, in software mode on a tmpfs MXL root (CI):
-# interaction and IME, dialogs/popups/downloads/permissions, templates/crash/hang, service workers,
-# IS-05 enable and restart, then the lifecycle of guideline G14: registered → SIGTERM → exit 143,
-# node gone from the Query API, own domain removed, and service workers off and on in a second
-# container. A registry runs next to it (the platform's image with docker/registry.json).
+# the counters at 0 right after start, interaction and IME, dialogs/popups/downloads/permissions,
+# templates/crash/hang, service workers, IS-05 enable and restart, then the lifecycle of guideline
+# G14: registered → SIGTERM → exit 143, node gone from the Query API, own domain removed, and
+# service workers off and on in a second container. A registry runs next to it (the platform's
+# image with docker/registry.json).
 # latency_test.py stays a lab test (its 150 ms budget needs the lab host's clock and CPU). The
 # container logs go to $IT_ARTIFACTS (default ./it-artifacts).
 #
@@ -43,6 +44,7 @@ curl -fs -o /dev/null http://127.0.0.1:8160/readyz || { echo "browser source not
 
 cd "$HERE"
 export DOCKER=docker
+python3 metrics_test.py 127.0.0.1:8160
 python3 interact_test.py 127.0.0.1:8160 "$NAME" "$DOMAIN"
 python3 pages_test.py 127.0.0.1:8160 "$NAME"
 python3 ops_test.py 127.0.0.1:8160 "$NAME"
