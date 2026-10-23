@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased (planned 1.3.3)
+## 1.3.3
 
-- **Counters at 0 from the start** (SPEC §12). Every event counter was created on its first event, so `page_hangs_total`, `preview_frames_dropped_total`, `renderer_crashes_total` and the like had no series (dashboards: "no data") until something happened. They are now exported at 0 when the function starts, with every label value the code can produce: `page_hangs_total`, `popups_blocked_total`, `downloads_blocked_total`, `preview_frames_total`, `preview_frames_dropped_total`, `page_loads_total{result}`, `renderer_crashes_total{reason}` (`abnormal`, `killed`, `crashed`, `oom`, `other`, `hung`), `js_dialogs_total{type}`, `permission_denied_total{type}`, `navigation_blocked_total{reason}`, `console_messages_total{level}`, `ograf_actions_total{action,result}`, `ograf_uploads_total{result}`, `ograf_restores_total{result}`, `interaction_events_total{type,result}` and, with audio, `audio_stream_events_total{event}`. Names, labels and meaning are unchanged.
+- **Counters at 0 from the start** (SPEC §12, #14). Every event counter was created on its first event, so `page_hangs_total`, `preview_frames_dropped_total`, `renderer_crashes_total` and the like had no series (dashboards: "no data") until something happened. They are now exported at 0 when the function starts, with every label value the code can produce: `page_hangs_total`, `popups_blocked_total`, `downloads_blocked_total`, `preview_frames_total`, `preview_frames_dropped_total`, `page_loads_total{result}`, `renderer_crashes_total{reason}` (`abnormal`, `killed`, `crashed`, `oom`, `other`, `hung`), `js_dialogs_total{type}`, `permission_denied_total{type}`, `navigation_blocked_total{reason}`, `console_messages_total{level}`, `ograf_actions_total{action,result}`, `ograf_uploads_total{result}`, `ograf_restores_total{result}`, `interaction_events_total{type,result}` and, with audio, `audio_stream_events_total{event}`. Names, labels and meaning are unchanged.
   - Tests: unit tests for the series at 0; `tests/integration/metrics_test.py` checks `/metrics` right after start (first test in CI).
 
 ## 1.3.2
