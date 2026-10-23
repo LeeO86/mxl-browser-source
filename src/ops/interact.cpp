@@ -81,6 +81,15 @@ namespace mbs::ops
         : _settings(settings)
         , _page(page)
     {
+        // interaction_events_total at 0 for every type and result it can count (1.3.3).
+        for (auto const* type : {"pointer", "wheel", "key", "text", "ime", "focus"})
+        {
+            _counters.events[std::string(type) + "/ok"] = 0;
+            _counters.events[std::string(type) + "/rejected"] = 0;
+        }
+        _counters.events["interact/rejected"] = 0;
+        _counters.events["invalid/rejected"] = 0;
+        _counters.events["any/dropped"] = 0;
     }
 
     void InteractHub::setStateParts(std::function<std::string()> page, std::function<std::string()> render)

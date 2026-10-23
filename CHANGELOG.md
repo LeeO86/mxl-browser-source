@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (planned 1.3.3)
+
+- **Counters at 0 from the start** (SPEC §12). Every event counter was created on its first event, so `page_hangs_total`, `preview_frames_dropped_total`, `renderer_crashes_total` and the like had no series (dashboards: "no data") until something happened. They are now exported at 0 when the function starts, with every label value the code can produce: `page_hangs_total`, `popups_blocked_total`, `downloads_blocked_total`, `preview_frames_total`, `preview_frames_dropped_total`, `page_loads_total{result}`, `renderer_crashes_total{reason}` (`abnormal`, `killed`, `crashed`, `oom`, `other`, `hung`), `js_dialogs_total{type}`, `permission_denied_total{type}`, `navigation_blocked_total{reason}`, `console_messages_total{level}`, `ograf_actions_total{action,result}`, `ograf_uploads_total{result}`, `ograf_restores_total{result}`, `interaction_events_total{type,result}` and, with audio, `audio_stream_events_total{event}`. Names, labels and meaning are unchanged.
+  - Tests: unit tests for the series at 0; `tests/integration/metrics_test.py` checks `/metrics` right after start (first test in CI).
+
 ## 1.3.2
 
 - **Interaction preview at 25 fps** (SPEC §7.3, #12). While a session controlled the page its preview stayed at `BROWSER_PREVIEW_FPS` (10): the server raises a session to 25 only when it asks with `{"type":"preview","fps":25}`, and the UI never asked (also not in 1.2.0). The UI now asks when its session gets control and asks for the default (`{"type":"preview"}`) when it loses it (toggle off, take-over, timeout, reconnect). The server also drops a session that loses control to at most `BROWSER_PREVIEW_FPS`, so a former controller that does not ask cannot keep 25. `BROWSER_PREVIEW_FPS` stays 10.

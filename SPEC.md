@@ -699,6 +699,8 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `ograf_uploads_total` | counter | `result` (`ok`, `rejected`) |
 | `ograf_restores_total` | counter | `result` (layers restored after a renderer reload) |
 
+Every counter is on `/metrics` from the start: the event counters are created at 0 with each label value the code can produce (`src/ops/counters.cpp`; `interaction_events_total` for each input type with `ok` and `rejected`, `interact`/`invalid` `rejected` and `any` `dropped`; `audio_stream_events_total` only with audio), and the counters read from the engine are set on every scrape. Before 1.3.3 an event counter had no series until its first event, so dashboards showed "no data" instead of 0.
+
 Process CPU and memory come from the standard `process_*` metrics of the function plus the summed RSS (`cef_processes_resident_bytes`) and CPU time (`cef_processes_cpu_seconds_total`, including exited processes their parents reaped, so a renderer crash does not reset it) of the CEF processes below the function's process. Grafana dashboard: `deploy/grafana/mxl-browser-source.json` (grains and repeats, paint latency p50/p95, conversion time, audio drift and fill, page state, crashes, CPU and memory, interaction), copied into the platform's `dashboards/` by hand with the source commit.
 
 ## 13. Process lifecycle, failure and recovery
