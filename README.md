@@ -109,6 +109,10 @@ Image size: about 900 MB uncompressed (CEF's `libcef.so` stripped of its debug s
 
 CMake ≥ 3.24 and Ninja. Without CEF and libmxl the core library and its unit tests build anywhere (`cmake -S . -B build -G Ninja && cmake --build build && build/unit-tests`; needs `libsamplerate0-dev`). The process itself builds in `docker/Dockerfile` (CEF minimal distribution, MXL via vcpkg, nmos-cpp). Behind a TLS-intercepting proxy pass `EXTRA_CA_CERT_B64` and the proxy build args.
 
+### Image with H.264 and H.265
+
+`ghcr.io/leeo86/mxl-browser-source:<version>-codecs` is the same function with a CEF build that also plays H.264 and H.265 (`<video>`, MSE, WebRTC receive), for example the WebRTC previews of other functions, which stay black in the normal image. **Licensing warning:** H.264 and H.265 are covered by patents; whoever deploys this variant is responsible for any licences that apply. How it is built: [`docs/proprietary-codecs.md`](docs/proprietary-codecs.md).
+
 ## License
 
 MIT, see [`LICENSE`](LICENSE). The image contains CEF (BSD-3-Clause), Chromium and other components with their own licences: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), in the image under `/usr/share/doc/mxl-browser-source/` (CEF's `LICENSE.txt` and Chromium's `CREDITS.html` in `cef/`).

@@ -1,0 +1,76 @@
+name: Container (H.264/H.265)
+
+# The image variant with a CEF build that plays H.264 and H.265 (docs/proprietary-codecs.md).
+# A tag codecs-<version> (for example codecs-1.3.3) builds that commit and pushes
+# <version>-codecs. Normal releases (v*.*.*) are not touched.
+on:
+  push:
+    tags: ["codecs-*"]
+
+concurrency:
+  group: container-codecs-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: cef
+        name: Read the CEF build and refuse an existing tag
+        run: |
+          . docker/cef-codecs/cef.env
+          echo "url=${CEF_CODECS_URL}" >> "$GITHUB_OUTPUT"
+          echo "sha1=${CEF_CODECS_SHA1}" >> "$GITHUB_OUTPUT"
+          tag="${GITHUB_REF_NAME#codecs-}-codecs"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "${REGISTRY}/${IMAGE_NAME,,}:${tag}" >/dev/null 2>&1; then
+            echo "image tag ${tag} exists; tags are never moved" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.cef.outputs.tag }}
+            type=raw,value=codecs
+          flavor: |
+            latest=false
+          labels: |
+            org.opencontainers.image.title=mxl-browser-source (H.264/H.265)
+            org.opencontainers.image.description=MXL media function: a web page rendered offscreen with CEF, built with proprietary codecs (H.264, H.265). Codec licensing is the user's responsibility.
+            org.opencontainers.image.source=https://github.com/LeeO86/mxl-browser-source
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            io.dmf.mxl.revision=218ddaa0a08c12ffe75fc475ae65aa3d9eef16d7
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          build-args: |
+            CEF_URL=${{ steps.cef.outputs.url }}
+            CEF_SHA1=${{ steps.cef.outputs.sha1 }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=codecs
+          cache-to: type=gha,mode=max,scope=codecs

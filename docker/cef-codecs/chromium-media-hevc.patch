@@ -1,0 +1,121 @@
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index 117bb7eb6d..3b49f40263 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -232,6 +232,10 @@ bool IsDecoderHevcProfileSupported(const VideoType& type) {
+   if (!IsDecoderColorSpaceSupported(type.color_space)) {
+     return false;
+   }
++#if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) && BUILDFLAG(USE_PROPRIETARY_CODECS)
++  // Software HEVC decoding through FFmpeg (this build).
++  return true;
++#else
+ 
+ #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+ #if BUILDFLAG(PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT)
+@@ -248,6 +252,7 @@ bool IsDecoderHevcProfileSupported(const VideoType& type) {
+ #else
+   return false;
+ #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++#endif  // ENABLE_FFMPEG_VIDEO_DECODERS && USE_PROPRIETARY_CODECS
+ }
+ 
+ bool IsDecoderVp9ProfileSupported(const VideoType& type) {
+@@ -579,7 +584,7 @@ bool IsEncoderOptionalVideoType(const media::VideoType& type) {
+ 
+ bool IsDecoderBuiltInVideoCodec(VideoCodec codec) {
+ #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) && BUILDFLAG(USE_PROPRIETARY_CODECS)
+-  if (codec == VideoCodec::kH264) {
++  if (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC) {
+     return true;
+   }
+ #endif  // BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) &&
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index eba1a21b3b..a4be993fc7 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -64,7 +64,7 @@ VideoColorSpace GetGuessedColorSpace(const VideoColorSpace& color_space) {
+ const char* GetAllowedVideoDecoders() {
+   // This should match the configured lists in //third_party/ffmpeg.
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS) && BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+-  return "h264";
++  return "h264,hevc";
+ #else
+   return "";
+ #endif
+diff --git a/media/ffmpeg/scripts/build_ffmpeg.py b/media/ffmpeg/scripts/build_ffmpeg.py
+index 9ef6ba9afc..591c82c324 100755
+--- a/media/ffmpeg/scripts/build_ffmpeg.py
++++ b/media/ffmpeg/scripts/build_ffmpeg.py
+@@ -1001,9 +1001,9 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+ 
+     # Google Chrome specific configuration.
+     configure_flags['Chrome'].extend([
+-        '--enable-decoder=aac,h264',
++        '--enable-decoder=aac,h264,hevc',
+         '--enable-demuxer=aac',
+-        '--enable-parser=aac,h264',
++        '--enable-parser=aac,h264,hevc',
+     ])
+ 
+     configure_flags['ChromeAndroid'].extend([
+diff --git a/media/filters/ffmpeg_video_decoder.cc b/media/filters/ffmpeg_video_decoder.cc
+index fef13f6b8a..4d8e2c03e4 100644
+--- a/media/filters/ffmpeg_video_decoder.cc
++++ b/media/filters/ffmpeg_video_decoder.cc
+@@ -73,7 +73,6 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+     case VideoCodec::kUnknown:
+     case VideoCodec::kVC1:
+     case VideoCodec::kMPEG2:
+-    case VideoCodec::kHEVC:
+     case VideoCodec::kVP9:
+     case VideoCodec::kAV1:
+     case VideoCodec::kDolbyVision:
+@@ -84,6 +83,7 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+       NOTREACHED();
+ 
+     case VideoCodec::kH264:
++    case VideoCodec::kHEVC:  // Software HEVC (this build): same as H.264.
+       // Normalize to three threads for 1080p content, then scale linearly
+       // with number of pixels.
+       // Examples:
+@@ -117,8 +117,9 @@ static void ReleaseVideoBufferImpl(void* opaque, uint8_t* data) {
+ 
+ // static
+ bool FFmpegVideoDecoder::IsCodecSupported(VideoCodec codec) {
+-  // We only build support for H.264.
+-  return codec == VideoCodec::kH264 && IsDecoderBuiltInVideoCodec(codec);
++  // H.264 and (in this build) HEVC.
++  return (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC) &&
++         IsDecoderBuiltInVideoCodec(codec);
+ }
+ 
+ FFmpegVideoDecoder::FFmpegVideoDecoder(MediaLog* media_log)
+diff --git a/media/video/renderable_gpu_memory_buffer_video_frame_pool.cc b/media/video/renderable_gpu_memory_buffer_video_frame_pool.cc
+index 5e025cfae4..4fe448a1be 100644
+--- a/media/video/renderable_gpu_memory_buffer_video_frame_pool.cc
++++ b/media/video/renderable_gpu_memory_buffer_video_frame_pool.cc
+@@ -194,6 +194,23 @@ bool FrameResources::Initialize(VideoPixelFormat format,
+ 
+   gfx::BufferUsage buffer_usage = gfx::BufferUsage::SCANOUT_CPU_READ_WRITE;
+ 
++#if BUILDFLAG(IS_WIN)
++  // For CEF OSR feature, currently there's no other place in chromium use RGBA.
++  // If the format is RGBA, currently CEF do not write to the texture anymore
++  // once the GMB is returned from CopyRequest. So there will be no race
++  // condition on that texture. We can request a GMB without a keyed mutex to
++  // accelerate and probably prevent some driver deadlock.
++  if (format == PIXEL_FORMAT_ARGB || format == PIXEL_FORMAT_ABGR) {
++    // This value is 'borrowed', SCANOUT_VEA_CPU_READ is probably invalid
++    // cause there's no real SCANOUT on Windows. We simply use this enum as a
++    // flag to disable mutex in the GMBFactoryDXGI because this enum is also
++    // used above in macOS and CrOS for similar usage (claim no other one will
++    // concurrently use the resource).
++    // https://chromium-review.googlesource.com/c/chromium/src/+/5302103
++    buffer_usage = gfx::BufferUsage::SCANOUT_VEA_CPU_READ;
++  }
++#endif
++
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+   buffer_usage = gfx::BufferUsage::SCANOUT_VEA_CPU_READ;
+ #elif BUILDFLAG(IS_LINUX)

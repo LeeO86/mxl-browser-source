@@ -1,5 +1,11 @@
 # Changelog
 
+## Image variant 1.3.3-codecs
+
+- **H.264 and H.265 (proprietary codecs).** A second image, `<version>-codecs`, uses a CEF build of the same version with H.264 and H.265 decoding in software (`<video>`, MSE, WebRTC receive); the normal image cannot play them, so for example the WebRTC previews of other functions stayed black. The function itself is unchanged. **Licensing is the user's responsibility** ([`docs/proprietary-codecs.md`](docs/proprietary-codecs.md)).
+  - `docker/Dockerfile` takes `CEF_URL` (default: the CEF project's build as before); `docker/cef-codecs/` holds the patches and the URL and SHA-1 of the build; a tag `codecs-<version>` runs `.github/workflows/container-codecs.yaml`.
+  - Tests: `tests/codecs/codecs.html` (all OK in the variant: `<video>` and MSE for both codecs, WebRTC H.264 loopback, H.265 offered for WebRTC receive).
+
 ## 1.3.3
 
 - **Counters at 0 from the start** (SPEC §12, #14). Every event counter was created on its first event, so `page_hangs_total`, `preview_frames_dropped_total`, `renderer_crashes_total` and the like had no series (dashboards: "no data") until something happened. They are now exported at 0 when the function starts, with every label value the code can produce: `page_hangs_total`, `popups_blocked_total`, `downloads_blocked_total`, `preview_frames_total`, `preview_frames_dropped_total`, `page_loads_total{result}`, `renderer_crashes_total{reason}` (`abnormal`, `killed`, `crashed`, `oom`, `other`, `hung`), `js_dialogs_total{type}`, `permission_denied_total{type}`, `navigation_blocked_total{reason}`, `console_messages_total{level}`, `ograf_actions_total{action,result}`, `ograf_uploads_total{result}`, `ograf_restores_total{result}`, `interaction_events_total{type,result}` and, with audio, `audio_stream_events_total{event}`. Names, labels and meaning are unchanged.
