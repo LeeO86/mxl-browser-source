@@ -34,7 +34,7 @@ TEST_CASE("the event counters are on /metrics at 0 from the start")
     util::Metrics m("p_");
     ops::startCounters(m, true);
     auto const text = m.render();
-    for (auto const* line : {"p_page_hangs_total 0", "p_preview_frames_total 0", "p_preview_frames_dropped_total 0", "p_popups_blocked_total 0",
+    for (auto const* line : {"p_page_hangs_total 0", "p_preview_frames_total 0", "p_preview_frames_dropped_total 0", R"(p_websocket_stuck_closes_total{reason="outbox_age"} 0)", "p_popups_blocked_total 0",
              "p_downloads_blocked_total 0", R"(p_page_loads_total{result="error"} 0)", R"(p_renderer_crashes_total{reason="hung"} 0)",
              R"(p_renderer_crashes_total{reason="crashed"} 0)", R"(p_js_dialogs_total{type="alert"} 0)", R"(p_permission_denied_total{type="camera"} 0)",
              R"(p_navigation_blocked_total{reason="service_worker"} 0)", R"(p_console_messages_total{level="error"} 0)",

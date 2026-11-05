@@ -13,6 +13,7 @@ ZERO = [
     "page_hangs_total",
     "preview_frames_total",
     "preview_frames_dropped_total",
+    'websocket_stuck_closes_total{reason="outbox_age"}',
     "popups_blocked_total",
     "downloads_blocked_total",
     'renderer_crashes_total{reason="crashed"}',

@@ -50,17 +50,21 @@ namespace mbs::ops
     /// outbox holds more than kOutboxBytes or its oldest frame is older than kStuckTimeout.
     /// Binary frames (previews) are dropped instead of queued when the socket is full (the next
     /// one is newer); one that has started is finished first. A client that takes no binary
-    /// frame for kStuckTimeout is closed too.
+    /// frame for kStuckTimeout is closed too. Such a "stuck" close is logged and reported to
+    /// `onStuck` with its reason (outbox_size, outbox_age, preview_not_taken).
+    /// The kernel keeps at most kUnsentBytes unsent (TCP_NOTSENT_LOWAT), so a slow path drops
+    /// previews early instead of holding seconds of them in the send buffer.
     class WebSocket
     {
     public:
-        WebSocket(int fd, std::string peer);
+        WebSocket(int fd, std::string peer, std::function<void(char const* reason)> onStuck = {});
         ~WebSocket();
         WebSocket(WebSocket const&) = delete;
         WebSocket& operator=(WebSocket const&) = delete;
 
         static constexpr std::chrono::milliseconds kStuckTimeout{5000};
         static constexpr std::size_t kOutboxBytes = 4 * 1024 * 1024;
+        static constexpr int kUnsentBytes = 64 * 1024;
 
         enum class Sent
         {
@@ -92,6 +96,7 @@ namespace mbs::ops
         bool flush();
         // With _sendMutex held:
         void fail();
+        void stuck(char const* reason); // logs, reports and closes
         void flushLocked(Clock::time_point now);
         Sent dropped(Clock::time_point now); // counts towards kStuckTimeout
 
@@ -101,6 +106,7 @@ namespace mbs::ops
         bool _dropping = false;
         Clock::time_point _droppingSince;
         std::string _peer;
+        std::function<void(char const*)> _onStuck;
         std::mutex _sendMutex;
         std::atomic<bool> _open{true};
     };
@@ -110,6 +116,7 @@ namespace mbs::ops
         std::function<void(std::shared_ptr<WebSocket> const&)> open;
         std::function<void(std::shared_ptr<WebSocket> const&, std::string const& message, bool binary)> message;
         std::function<void(std::shared_ptr<WebSocket> const&)> close;
+        std::function<void(char const* reason)> stuck; // a stuck close (WebSocket)
         std::size_t maxMessage = 64 * 1024; // larger messages close the connection (1009)
     };
 

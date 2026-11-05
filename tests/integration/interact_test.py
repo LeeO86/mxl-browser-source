@@ -10,6 +10,7 @@ mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard library only.
     interact_test.py [host:port] [container domain-dir]
 """
 import base64
+import hashlib
 import json
 import os
 import re
@@ -52,8 +53,9 @@ def ws_messages(sock, seconds):
     return ws_read(sock, seconds)[0]
 
 
-def ws_read(sock, seconds):
-    """Text messages and the number of binary frames (previews) received within `seconds`."""
+def ws_read(sock, seconds, pictures=None):
+    """Text messages and the number of binary frames (previews) received within `seconds`.
+    `pictures`, a list, gets the digest of each preview's JPEG (after the 8-byte grain)."""
     out, frames, buf = [], 0, _partial.pop(sock, b"")
     end = time.time() + seconds
     sock.settimeout(0.2)
@@ -82,6 +84,8 @@ def ws_read(sock, seconds):
                 out.append(json.loads(payload))
             elif opcode == 0x2:
                 frames += 1
+                if pictures is not None:
+                    pictures.append(hashlib.md5(payload[8:]).hexdigest())
     _partial[sock] = buf
     return out, frames
 
@@ -176,6 +180,27 @@ def preview_rates(host, port):
     b.close()
 
 
+def preview_new_pictures(host, port):
+    """SPEC §7.3: every preview frame of a moving page is a new picture (1.3.3 resent the previous
+    JPEG when the preview took longer than 20 ms: about 2 new pictures a second on a busy page)."""
+    page = ("data:text/html,<body style=margin:0><canvas id=c width=1920 height=1080></canvas><script>"
+            "const g=c.getContext('2d');let n=0;(function f(){g.fillStyle=`hsl(${n*7%360},70%,50%)`;"
+            "g.fillRect(0,0,1920,1080);g.fillStyle='%23fff';g.font='300px sans-serif';g.fillText(n++,200,600);"
+            "requestAnimationFrame(f)})()</script>")
+    request = urllib.request.Request(f"http://{host}:{port}/api/v1/source/navigate", method="POST",
+                                     data=json.dumps({"url": page}).encode(), headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(request, timeout=5).read()
+    time.sleep(2)
+    sock = ws_connect(host, port, "/api/v1/interact")
+    ws_read(sock, 1)
+    pictures = []
+    frames = ws_read(sock, 4, pictures)[1]
+    repeats = sum(1 for a, b in zip(pictures, pictures[1:]) if a == b)
+    assert frames >= 30 and repeats == 0, f"{frames} frames, {repeats} repeated the previous picture"
+    print(f"OK: preview of a moving page: {frames} frames in 4 s, none repeats the previous picture")
+    sock.close()
+
+
 def metric(host, port, name):
     with urllib.request.urlopen(f"http://{host}:{port}/metrics", timeout=5) as response:
         text = response.read().decode()
@@ -200,7 +225,9 @@ def stuck_client(host, port, observer):
     assert rate >= 15, "the unread client slowed the controller"
     assert dropped > 0, "no preview frame dropped for the unread client"
     assert sessions == 1, "the unread client was not closed"
-    print("OK: an unread client does not slow the controller's preview and is closed")
+    stuck = metric(host, port, "websocket_stuck_closes_total")
+    assert stuck >= 1, "the stuck close was not counted"
+    print(f"OK: an unread client does not slow the controller's preview and is closed ({stuck:.0f} stuck close counted)")
     observer.close()
     c.close()
 
@@ -258,6 +285,7 @@ def main():
     control.close()
     stuck_client(host, port, observer)
     preview_rates(host, port)
+    preview_new_pictures(host, port)
 
 
 if __name__ == "__main__":
