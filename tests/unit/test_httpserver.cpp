@@ -258,12 +258,17 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
 {
     std::shared_ptr<WebSocket> socket;
     std::mutex mutex;
+    std::vector<std::string> stuckReasons; // reported stuck closes, in order
     HttpServer server([](HttpRequest const&, HttpResponse& res) { res.status = 404; },
         [&](HttpRequest const&, HttpResponse&) -> std::optional<WebSocketHandlers> {
             WebSocketHandlers h;
             h.open = [&](std::shared_ptr<WebSocket> const& s) {
                 std::lock_guard lock{mutex};
                 socket = s;
+            };
+            h.stuck = [&](char const* reason) {
+                std::lock_guard lock{mutex};
+                stuckReasons.emplace_back(reason);
             };
             return h;
         });
@@ -421,4 +426,14 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
     CHECK(!bigWs->open());
     ::close(bigFd);
     server.stop();
+    // Each stuck close was reported once, with its reason (the first client recovered). The
+    // preview client's started frame waits in the outbox, so its age closes it.
+    std::lock_guard lock{mutex};
+    std::string reported;
+    for (auto const& r : stuckReasons)
+    {
+        reported += r + " ";
+    }
+    INFO(reported);
+    CHECK(stuckReasons == std::vector<std::string>{"outbox_age", "outbox_age", "outbox_size"});
 }

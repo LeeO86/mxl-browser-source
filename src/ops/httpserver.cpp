@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <thread>
 
+#include "util/logging.hpp"
 #include "util/uuid.hpp"
 
 namespace mbs::ops
@@ -224,10 +226,13 @@ namespace mbs::ops
         return {};
     }
 
-    WebSocket::WebSocket(int fd, std::string peer)
+    WebSocket::WebSocket(int fd, std::string peer, std::function<void(char const* reason)> onStuck)
         : _fd(fd)
         , _peer(std::move(peer))
+        , _onStuck(std::move(onStuck))
     {
+        int const unsent = kUnsentBytes;
+        ::setsockopt(_fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &unsent, sizeof(unsent));
     }
 
     WebSocket::~WebSocket() = default;
@@ -244,7 +249,7 @@ namespace mbs::ops
         _outboxBytes += _outbox.back().bytes.size();
         if (_outboxBytes > kOutboxBytes)
         {
-            fail();
+            stuck("outbox_size");
             return false;
         }
         flushLocked(now);
@@ -269,6 +274,16 @@ namespace mbs::ops
         _outboxBytes = 0;
     }
 
+    void WebSocket::stuck(char const* reason)
+    {
+        log::warn("websocket_stuck_close", {{"client", _peer}, {"reason", reason}, {"outbox_bytes", static_cast<std::uint64_t>(_outboxBytes)}});
+        if (_onStuck)
+        {
+            _onStuck(reason);
+        }
+        fail();
+    }
+
     void WebSocket::flushLocked(Clock::time_point now)
     {
         while (!_outbox.empty())
@@ -291,7 +306,7 @@ namespace mbs::ops
         }
         if (!_outbox.empty() && now - _outbox.front().queued >= kStuckTimeout)
         {
-            fail();
+            stuck("outbox_age");
         }
     }
 
@@ -304,7 +319,7 @@ namespace mbs::ops
         }
         else if (now - _droppingSince >= kStuckTimeout)
         {
-            fail();
+            stuck("preview_not_taken");
             return Sent::Closed;
         }
         return Sent::Dropped;
@@ -644,7 +659,7 @@ namespace mbs::ops
             {
                 return;
             }
-            auto socket = std::make_shared<WebSocket>(fd, req.peer);
+            auto socket = std::make_shared<WebSocket>(fd, req.peer, handlers.stuck);
             {
                 std::lock_guard lock{socketsMutex};
                 std::erase_if(sockets, [](auto const& w) { return w.expired(); });

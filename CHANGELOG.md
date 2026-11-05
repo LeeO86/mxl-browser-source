@@ -1,6 +1,17 @@
 # Changelog
 
-## Image variant 1.3.3-codecs
+## 1.3.4 (2026-11-05)
+
+- **Interaction preview shows every new picture** (SPEC §7.3). The WebSocket preview waited only 20 ms for a new preview and otherwise sent the previous JPEG again: on a busy page (YouTube on test-all-gfx) about 2 of 9 frames per second were new, so the preview stood still for seconds. It now waits for the preview like `preview.jpg` (up to 100 ms), and a session never gets the same picture twice.
+  - Tests: `tests/integration/interact_test.py` (a moving page: no frame repeats the previous picture).
+- **Stuck closes are logged and counted** (SPEC §7.3, §12). A WebSocket closed because its client did not read (which ends interaction control) logs `websocket_stuck_close` with the client and reason and counts `websocket_stuck_closes_total{reason}` (`outbox_size`, `outbox_age`, `preview_not_taken`; at 0 from the start).
+  - Tests: `tests/unit/test_httpserver.cpp` (each reason reported once), `tests/unit/test_counters.cpp`, `tests/integration/metrics_test.py`, `interact_test.py`.
+- **Previews do not pile up in the kernel** (SPEC §7.3). WebSockets keep at most 64 KiB unsent (`TCP_NOTSENT_LOWAT`); on a slow path the server drops previews early instead of holding seconds of them in the send buffer, so the preview latency no longer grows and shrinks.
+  - **Behaviour change for clients:** a client of `/api/v1/interact` must read what it receives. One that only sends input and reads nothing is now closed after about 5 s (before, the kernel buffered megabytes of previews, so it took much longer); the web UI and widget always read. Tests that drive input read in the background (`tests/integration/pages_test.py`).
+
+## Image variant 1.3.3.2-codecs (2026-11-05)
+
+First image with H.264/H.265, built from 1.3.3; from 1.3.4 on every release also has `<version>-codecs`.
 
 - **H.264 and H.265 (proprietary codecs).** A second image, `<version>-codecs`, uses a CEF build of the same version with H.264 (`<video>`, MSE, WebRTC receive) and H.265 (`<video>`, MSE) decoding in software; the normal image cannot play them, so for example the WebRTC previews of other functions stayed black. The function itself is unchanged. **Licensing is the user's responsibility** ([`docs/proprietary-codecs.md`](docs/proprietary-codecs.md)).
   - `docker/Dockerfile` takes `CEF_URL` (default: the CEF project's build as before); `docker/cef-codecs/` holds the patches and the URL and SHA-1 of the build; a tag `codecs-<version>` runs `.github/workflows/container-codecs.yaml`.

@@ -33,6 +33,7 @@ namespace mbs::ops
         zero(m, "console_messages_total", "level", {"debug", "info", "warning", "error"});
         zero(m, "ograf_uploads_total", "result", {"ok", "rejected"});
         zero(m, "ograf_restores_total", "result", {"ok", "error"});
+        zero(m, "websocket_stuck_closes_total", "reason", {"outbox_size", "outbox_age", "preview_not_taken"});
         for (auto const* action : {"load", "play", "stop", "update", "custom", "clear"})
         {
             for (auto const* result : {"ok", "error", "timeout", "unavailable"})

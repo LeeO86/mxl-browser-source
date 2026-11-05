@@ -10,6 +10,7 @@ mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard library only.
     interact_test.py [host:port] [container domain-dir]
 """
 import base64
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -47,13 +49,30 @@ def ws_send(sock, obj):
 _partial = {}  # socket -> bytes of a frame that had not fully arrived when ws_messages returned
 
 
+def drain(sock):
+    """Reads and discards everything `sock` receives, in the background: a session that reads
+    nothing for 5 s is closed as stuck (SPEC §7.3), also when its test only sends input."""
+    def run():
+        sock.settimeout(0.5)
+        while True:
+            try:
+                if not sock.recv(65536):
+                    return
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+    threading.Thread(target=run, daemon=True).start()
+
+
 def ws_messages(sock, seconds):
     """Text messages received within `seconds` (binary frames are skipped)."""
     return ws_read(sock, seconds)[0]
 
 
-def ws_read(sock, seconds):
-    """Text messages and the number of binary frames (previews) received within `seconds`."""
+def ws_read(sock, seconds, pictures=None):
+    """Text messages and the number of binary frames (previews) received within `seconds`.
+    `pictures`, a list, gets the digest of each preview's JPEG (after the 8-byte grain)."""
     out, frames, buf = [], 0, _partial.pop(sock, b"")
     end = time.time() + seconds
     sock.settimeout(0.2)
@@ -82,6 +101,8 @@ def ws_read(sock, seconds):
                 out.append(json.loads(payload))
             elif opcode == 0x2:
                 frames += 1
+                if pictures is not None:
+                    pictures.append(hashlib.md5(payload[8:]).hexdigest())
     _partial[sock] = buf
     return out, frames
 
@@ -154,8 +175,14 @@ def preview_rates(host, port):
     b = ws_connect(host, port, "/api/v1/interact")
 
     def fps(sock):
+        # The other session keeps reading: one that reads nothing for 5 s is closed (SPEC §7.3).
+        other = b if sock is a else a
+        drain = threading.Thread(target=ws_read, args=(other, 4))
+        drain.start()
         ws_read(sock, 1)  # frames still queued at the old rate
-        return ws_read(sock, 3)[1] / 3
+        rate = ws_read(sock, 3)[1] / 3
+        drain.join()
+        return rate
 
     watcher = fps(a)
     ws_send(a, {"type": "interact", "enable": True, "take": True})
@@ -174,6 +201,29 @@ def preview_rates(host, port):
     print(f"OK: preview {rates}")
     a.close()
     b.close()
+
+
+def preview_new_pictures(host, port):
+    """SPEC §7.3: every preview frame of a moving page is a new picture (1.3.3 resent the previous
+    JPEG when the preview took longer than 20 ms: about 2 new pictures a second on a busy page)."""
+    # data: pages are refused by the URL policy: animate the test page instead.
+    animate = ("const c=document.createElement('canvas');c.width=1920;c.height=1080;"
+               "c.style='position:fixed;left:0;top:0;z-index:9';document.body.appendChild(c);"
+               "const g=c.getContext('2d');let n=0;(function f(){g.fillStyle=`hsl(${n*7%360},70%,50%)`;"
+               "g.fillRect(0,0,1920,1080);g.fillStyle='#fff';g.font='300px sans-serif';g.fillText(n++,200,600);"
+               "requestAnimationFrame(f)})()")
+    request = urllib.request.Request(f"http://{host}:{port}/api/v1/source/execute", method="POST",
+                                     data=json.dumps({"js": animate}).encode(), headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(request, timeout=5).read()
+    time.sleep(2)
+    sock = ws_connect(host, port, "/api/v1/interact")
+    ws_read(sock, 1)
+    pictures = []
+    frames = ws_read(sock, 4, pictures)[1]
+    repeats = sum(1 for a, b in zip(pictures, pictures[1:]) if a == b)
+    assert frames >= 30 and repeats == 0, f"{frames} frames, {repeats} repeated the previous picture"
+    print(f"OK: preview of a moving page: {frames} frames in 4 s, none repeats the previous picture")
+    sock.close()
 
 
 def metric(host, port, name):
@@ -200,7 +250,9 @@ def stuck_client(host, port, observer):
     assert rate >= 15, "the unread client slowed the controller"
     assert dropped > 0, "no preview frame dropped for the unread client"
     assert sessions == 1, "the unread client was not closed"
-    print("OK: an unread client does not slow the controller's preview and is closed")
+    stuck = metric(host, port, "websocket_stuck_closes_total")
+    assert stuck >= 1, "the stuck close was not counted"
+    print(f"OK: an unread client does not slow the controller's preview and is closed ({stuck:.0f} stuck close counted)")
     observer.close()
     c.close()
 
@@ -258,6 +310,7 @@ def main():
     control.close()
     stuck_client(host, port, observer)
     preview_rates(host, port)
+    preview_new_pictures(host, port)
 
 
 if __name__ == "__main__":

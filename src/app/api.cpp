@@ -395,6 +395,7 @@ namespace mbs::app
             return std::nullopt;
         }
         ops::WebSocketHandlers h;
+        h.stuck = [this](char const* reason) { _metrics.inc("websocket_stuck_closes_total", {{"reason", reason}}, 1); };
         if (req.path == "/api/v1/events")
         {
             h.open = [this](std::shared_ptr<ops::WebSocket> const& socket) {

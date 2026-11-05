@@ -1473,9 +1473,12 @@ namespace mbs::app
 
     // Preview frames for the interaction sessions at their rates (SPEC §7.3): one JPEG per new
     // frame, sent to each session that is due. Nothing is converted while nobody watches.
+    // A session never gets the same picture twice: until 1.3.3 a preview that took longer than
+    // 20 ms was answered with the previous JPEG (about 2 new pictures a second on a busy page).
     void Application::previewLoop()
     {
         std::map<int, Clock::time_point> due;
+        std::map<int, std::uint64_t> shown; // per session: the preview sequence it got last
         std::vector<std::uint8_t> rgb;
         std::uint64_t sequence = 0;
         while (!_stopping.load())
@@ -1499,17 +1502,20 @@ namespace mbs::app
                 }
             }
             std::erase_if(due, [&](auto const& entry) { return rates.count(entry.first) == 0; });
+            std::erase_if(shown, [&](auto const& entry) { return rates.count(entry.first) == 0; });
             if (ready.empty())
             {
                 continue;
             }
+            // Waits for a preview made after this request, as preview.jpg does (at most 100 ms).
             auto const ticket = _engine->requestPreview();
-            for (int i = 0; i < 10 && !_engine->preview(ticket, rgb, sequence); ++i)
+            for (int i = 0; i < 50 && !_engine->preview(ticket, rgb, sequence); ++i)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             std::string jpeg;
             std::uint64_t grain = 0;
+            std::uint64_t jpegSequence = 0;
             {
                 std::lock_guard lock{_jpegMutex};
                 if (sequence != _jpegSequence && !rgb.empty())
@@ -1520,6 +1526,7 @@ namespace mbs::app
                 }
                 jpeg = _jpeg;
                 grain = _jpegGrain;
+                jpegSequence = _jpegSequence;
             }
             if (jpeg.empty())
             {
@@ -1536,9 +1543,11 @@ namespace mbs::app
                 std::lock_guard lock{_socketsMutex};
                 for (int id : ready)
                 {
-                    if (auto it = _interactSockets.find(id); it != _interactSockets.end())
+                    auto it = _interactSockets.find(id);
+                    if (it != _interactSockets.end() && shown[id] != jpegSequence)
                     {
                         targets.push_back(it->second);
+                        shown[id] = jpegSequence;
                     }
                 }
             }
