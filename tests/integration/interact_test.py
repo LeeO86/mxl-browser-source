@@ -190,12 +190,14 @@ def preview_rates(host, port):
 def preview_new_pictures(host, port):
     """SPEC §7.3: every preview frame of a moving page is a new picture (1.3.3 resent the previous
     JPEG when the preview took longer than 20 ms: about 2 new pictures a second on a busy page)."""
-    page = ("data:text/html,<body style=margin:0><canvas id=c width=1920 height=1080></canvas><script>"
-            "const g=c.getContext('2d');let n=0;(function f(){g.fillStyle=`hsl(${n*7%360},70%,50%)`;"
-            "g.fillRect(0,0,1920,1080);g.fillStyle='%23fff';g.font='300px sans-serif';g.fillText(n++,200,600);"
-            "requestAnimationFrame(f)})()</script>")
-    request = urllib.request.Request(f"http://{host}:{port}/api/v1/source/navigate", method="POST",
-                                     data=json.dumps({"url": page}).encode(), headers={"Content-Type": "application/json"})
+    # data: pages are refused by the URL policy: animate the test page instead.
+    animate = ("const c=document.createElement('canvas');c.width=1920;c.height=1080;"
+               "c.style='position:fixed;left:0;top:0;z-index:9';document.body.appendChild(c);"
+               "const g=c.getContext('2d');let n=0;(function f(){g.fillStyle=`hsl(${n*7%360},70%,50%)`;"
+               "g.fillRect(0,0,1920,1080);g.fillStyle='#fff';g.font='300px sans-serif';g.fillText(n++,200,600);"
+               "requestAnimationFrame(f)})()")
+    request = urllib.request.Request(f"http://{host}:{port}/api/v1/source/execute", method="POST",
+                                     data=json.dumps({"js": animate}).encode(), headers={"Content-Type": "application/json"})
     urllib.request.urlopen(request, timeout=5).read()
     time.sleep(2)
     sock = ws_connect(host, port, "/api/v1/interact")
