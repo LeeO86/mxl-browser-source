@@ -18,6 +18,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -158,8 +159,14 @@ def preview_rates(host, port):
     b = ws_connect(host, port, "/api/v1/interact")
 
     def fps(sock):
+        # The other session keeps reading: one that reads nothing for 5 s is closed (SPEC §7.3).
+        other = b if sock is a else a
+        drain = threading.Thread(target=ws_read, args=(other, 4))
+        drain.start()
         ws_read(sock, 1)  # frames still queued at the old rate
-        return ws_read(sock, 3)[1] / 3
+        rate = ws_read(sock, 3)[1] / 3
+        drain.join()
+        return rate
 
     watcher = fps(a)
     ws_send(a, {"type": "interact", "enable": True, "take": True})
