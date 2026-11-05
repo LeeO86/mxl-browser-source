@@ -9,7 +9,7 @@ Standard library only.
 """
 import time
 
-from interact_test import ws_connect, ws_messages, ws_send
+from interact_test import drain, ws_connect, ws_messages, ws_send
 from ops_test import HOST, PORT, metric, navigate, status
 
 
@@ -113,6 +113,7 @@ if __name__ == "__main__":
     ws_send(control, {"type": "hello", "client": "pages_test", "protocol": 1})
     ws_send(control, {"type": "interact", "enable": True})
     ws_send(control, {"type": "focus", "focused": True})
+    drain(control)  # it only sends input; its previews must still be read
     dialogs(events, control)
     popup(events, control)
     download(events, control)

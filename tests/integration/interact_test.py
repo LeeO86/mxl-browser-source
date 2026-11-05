@@ -49,6 +49,22 @@ def ws_send(sock, obj):
 _partial = {}  # socket -> bytes of a frame that had not fully arrived when ws_messages returned
 
 
+def drain(sock):
+    """Reads and discards everything `sock` receives, in the background: a session that reads
+    nothing for 5 s is closed as stuck (SPEC §7.3), also when its test only sends input."""
+    def run():
+        sock.settimeout(0.5)
+        while True:
+            try:
+                if not sock.recv(65536):
+                    return
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+    threading.Thread(target=run, daemon=True).start()
+
+
 def ws_messages(sock, seconds):
     """Text messages received within `seconds` (binary frames are skipped)."""
     return ws_read(sock, seconds)[0]
