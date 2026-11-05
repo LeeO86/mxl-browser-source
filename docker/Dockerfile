@@ -21,6 +21,8 @@ RUN npm run build
 FROM ${UBUNTU} AS cef
 ARG CEF_VERSION=144.0.21+g4f5b28c+chromium-144.0.7559.248
 ARG CEF_SHA1=e6233049cec12ba108b4b920b499e2a082ffd0ae
+# Another CEF build of the same version, e.g. the one with H.264/H.265 (docs/proprietary-codecs.md).
+ARG CEF_URL=""
 ARG EXTRA_CA_CERT_B64=""
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl bzip2 build-essential cmake ninja-build python3 \
@@ -29,7 +31,7 @@ RUN if [ -n "$EXTRA_CA_CERT_B64" ]; then echo "$EXTRA_CA_CERT_B64" | base64 -d >
 COPY docker/fetch.sh /usr/local/bin/fetch.sh
 WORKDIR /opt
 # libcef.so ships with debug symbols (1.5 GB): stripped, the dynamic symbols stay for linking.
-RUN url="https://cef-builds.spotifycdn.com/cef_binary_$(echo "$CEF_VERSION" | sed 's/+/%2B/g')_linux64_minimal.tar.bz2" \
+RUN url="${CEF_URL:-https://cef-builds.spotifycdn.com/cef_binary_$(echo "$CEF_VERSION" | sed 's/+/%2B/g')_linux64_minimal.tar.bz2}" \
     && sh /usr/local/bin/fetch.sh "$url" cef.tar.bz2 "$CEF_SHA1" \
     && mkdir cef && tar xjf cef.tar.bz2 -C cef --strip-components=1 && rm cef.tar.bz2 \
     && strip --strip-unneeded cef/Release/libcef.so \

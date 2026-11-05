@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>codecs</title>
+<style>
+body{margin:0;background:#111;color:#eee;font:28px/1.25 monospace}
+#out{position:absolute;left:20px;top:10px;width:1240px;white-space:pre-wrap}
+video{position:absolute;width:300px;height:169px;background:#000}
+.ok{color:#5f5}.no{color:#f55}
+</style></head><body>
+<div id="out"></div>
+<video id="v1" muted playsinline style="right:330px;top:10px"></video>
+<video id="v2" muted playsinline style="right:10px;top:10px"></video>
+<video id="v3" muted playsinline style="right:330px;top:190px"></video>
+<video id="v4" muted playsinline style="right:10px;top:190px"></video>
+<video id="v5" muted playsinline autoplay style="right:10px;top:370px"></video>
+<script>
+const out = document.getElementById('out');
+const line = (name, ok, extra='') => { out.innerHTML += `<span class="${ok?'ok':'no'}">${ok?'OK  ':'NO  '}</span>${name} ${extra}\n`; };
+const AVC = 'video/mp4; codecs="avc1.640028"', HEVC = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
+line('canPlayType H.264', document.createElement('video').canPlayType(AVC) !== '', document.createElement('video').canPlayType(AVC));
+line('canPlayType H.265', document.createElement('video').canPlayType(HEVC) !== '', document.createElement('video').canPlayType(HEVC));
+line('MSE H.264', MediaSource.isTypeSupported(AVC));
+line('MSE H.265', MediaSource.isTypeSupported(HEVC));
+const rx = [...new Set(RTCRtpReceiver.getCapabilities('video').codecs.map(c => c.mimeType.replace('video/','')))];
+const tx = [...new Set(RTCRtpSender.getCapabilities('video').codecs.map(c => c.mimeType.replace('video/','')))];
+line('WebRTC receive H.264', rx.includes('H264')); line('WebRTC H.265 not offered', !rx.includes('H265'));
+out.innerHTML += `    receive: ${rx.join(' ')}\n    send: ${tx.join(' ')}\n`;
+
+// Decoded picture is not black and time moves: the video really plays.
+async function playing(v, name) {
+  try { await v.play(); } catch (e) { line(name, false, e.name); return; }
+  await new Promise(r => setTimeout(r, 2000));
+  const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+  const g = c.getContext('2d'); g.drawImage(v, 0, 0, 64, 36);
+  const d = g.getImageData(0, 0, 64, 36).data; let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i+1] + d[i+2];
+  line(name, v.currentTime > 0.5 && sum > 64*36*30, `t=${v.currentTime.toFixed(2)} s, ${v.videoWidth}x${v.videoHeight}, level ${(sum/64/36/3).toFixed(0)}`);
+}
+function mse(v, file, type) {
+  const ms = new MediaSource(); v.src = URL.createObjectURL(ms);
+  ms.addEventListener('sourceopen', async () => {
+    const sb = ms.addSourceBuffer(type); const buf = await (await fetch(file)).arrayBuffer();
+    sb.addEventListener('updateend', () => { if (ms.readyState === 'open') ms.endOfStream(); }, {once: true});
+    sb.appendBuffer(buf);
+  });
+}
+async function webrtc() {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 360; const g = c.getContext('2d');
+  let n = 0; setInterval(() => { g.fillStyle = `hsl(${n*7%360},80%,50%)`; g.fillRect(0, 0, 640, 360); g.fillStyle = '#fff'; g.font = '80px monospace'; g.fillText(String(n++), 40, 200); }, 40);
+  const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+  a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+  b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+  b.ontrack = e => { document.getElementById('v5').srcObject = e.streams[0]; };
+  const t = a.addTransceiver(c.captureStream(25).getVideoTracks()[0], {direction: 'sendonly', streams: [new MediaStream()]});
+  t.setCodecPreferences(RTCRtpSender.getCapabilities('video').codecs.filter(x => x.mimeType === 'video/H264'));
+  await a.setLocalDescription(); await b.setRemoteDescription(a.localDescription);
+  await b.setLocalDescription(); await a.setRemoteDescription(b.localDescription);
+  await new Promise(r => setTimeout(r, 4000));
+  let inb = null, codec = ''; const st = await b.getStats();
+  st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') inb = s; });
+  if (inb && inb.codecId) codec = st.get(inb.codecId).mimeType;
+  line('WebRTC H.264 loopback', !!inb && inb.framesDecoded > 20 && codec === 'video/H264', inb ? `${codec} decoded ${inb.framesDecoded} by ${inb.decoderImplementation}` : 'no stats');
+}
+(async () => {
+  const v1 = document.getElementById('v1'), v2 = document.getElementById('v2'), v3 = document.getElementById('v3'), v4 = document.getElementById('v4');
+  v1.src = 'h264.mp4'; v2.src = 'hevc.mp4'; v1.loop = v2.loop = true;
+  mse(v3, 'h264-frag.mp4', AVC); mse(v4, 'hevc-frag.mp4', HEVC);
+  await playing(v1, 'video H.264'); await playing(v2, 'video H.265');
+  await playing(v3, 'MSE H.264'); await playing(v4, 'MSE H.265');
+  await webrtc();
+  out.innerHTML += 'done\n'; document.title = out.textContent.replace(/\n/g, ' | ');
+})();
+</script></body></html>
