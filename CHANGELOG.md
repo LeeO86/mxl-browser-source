@@ -7,6 +7,7 @@
 - **Stuck closes are logged and counted** (SPEC §7.3, §12). A WebSocket closed because its client did not read (which ends interaction control) logs `websocket_stuck_close` with the client and reason and counts `websocket_stuck_closes_total{reason}` (`outbox_size`, `outbox_age`, `preview_not_taken`; at 0 from the start).
   - Tests: `tests/unit/test_httpserver.cpp` (each reason reported once), `tests/unit/test_counters.cpp`, `tests/integration/metrics_test.py`, `interact_test.py`.
 - **Previews do not pile up in the kernel** (SPEC §7.3). WebSockets keep at most 64 KiB unsent (`TCP_NOTSENT_LOWAT`); on a slow path the server drops previews early instead of holding seconds of them in the send buffer, so the preview latency no longer grows and shrinks.
+  - **Behaviour change for clients:** a client of `/api/v1/interact` must read what it receives. One that only sends input and reads nothing is now closed after about 5 s (before, the kernel buffered megabytes of previews, so it took much longer); the web UI and widget always read. Tests that drive input read in the background (`tests/integration/pages_test.py`).
 
 ## Image variant 1.3.3.2-codecs (2026-11-05)
 
