@@ -22,7 +22,7 @@ line('MSE H.264', MediaSource.isTypeSupported(AVC));
 line('MSE H.265', MediaSource.isTypeSupported(HEVC));
 const rx = [...new Set(RTCRtpReceiver.getCapabilities('video').codecs.map(c => c.mimeType.replace('video/','')))];
 const tx = [...new Set(RTCRtpSender.getCapabilities('video').codecs.map(c => c.mimeType.replace('video/','')))];
-line('WebRTC receive H.264', rx.includes('H264')); line('WebRTC receive H.265', rx.includes('H265'));
+line('WebRTC receive H.264', rx.includes('H264')); line('WebRTC H.265 not offered', !rx.includes('H265'));
 out.innerHTML += `    receive: ${rx.join(' ')}\n    send: ${tx.join(' ')}\n`;
 
 // Decoded picture is not black and time moves: the video really plays.

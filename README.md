@@ -111,7 +111,7 @@ CMake ≥ 3.24 and Ninja. Without CEF and libmxl the core library and its unit t
 
 ### Image with H.264 and H.265
 
-`ghcr.io/leeo86/mxl-browser-source:<version>-codecs` is the same function with a CEF build that also plays H.264 and H.265 (`<video>`, MSE, WebRTC receive), for example the WebRTC previews of other functions, which stay black in the normal image. **Licensing warning:** H.264 and H.265 are covered by patents; whoever deploys this variant is responsible for any licences that apply. How it is built: [`docs/proprietary-codecs.md`](docs/proprietary-codecs.md).
+`ghcr.io/leeo86/mxl-browser-source:<version>-codecs` is the same function with a CEF build that also plays H.264 (`<video>`, MSE, WebRTC receive) and H.265 (`<video>`, MSE), for example the WebRTC previews of other functions, which stay black in the normal image. **Licensing warning:** H.264 and H.265 are covered by patents; whoever deploys this variant is responsible for any licences that apply. How it is built: [`docs/proprietary-codecs.md`](docs/proprietary-codecs.md).
 
 ## License
 

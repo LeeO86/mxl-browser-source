@@ -15,7 +15,7 @@ with a CEF build of the same version (`CEF_VERSION` in `docker/Dockerfile`) that
 | What | H.264 | H.265 |
 |---|---|---|
 | `<video>` and MSE (FFmpeg, software) | yes | yes |
-| WebRTC receive (FFmpeg, software) | yes | offered (Main, Main 10), not tested end to end |
+| WebRTC receive (FFmpeg, software) | yes | no |
 | WebRTC send (encode) | OpenH264 | no |
 
 A GPU decoder is not needed and not used. (Chromium on Linux decodes video in
@@ -23,9 +23,8 @@ hardware only through VA-API, Intel and AMD; NVIDIA's NVDEC is not supported.)
 
 Checked with `tests/codecs/codecs.html` in the variant (software rendering): H.264
 and H.265 1280x720 play in `<video>` and through MSE, a WebRTC H.264 loopback
-decodes, and H.265 is offered for WebRTC receive. WebRTC H.265 was not tested end
-to end: the build has no H.265 encoder, and no external H.265 WebRTC sender was
-at hand.
+decodes. WebRTC H.265 is left out: Chromium decodes it only with a hardware decoder,
+and a software path could not be tested end to end, so it is not offered.
 
 ## How the CEF build is made
 
@@ -38,8 +37,8 @@ GN_DEFINES=is_official_build=true use_sysroot=true symbol_level=0 is_cfi=false
 ```
 
 `proprietary_codecs` and `ffmpeg_branding="Chrome"` give H.264. Chromium decodes H.265
-only with a hardware decoder, so three patches in `docker/cef-codecs/` add a software
-path (apply after CEF's own patches):
+only with a hardware decoder, so two patches in `docker/cef-codecs/` add a software
+path for `<video>` and MSE (apply after CEF's own patches):
 
 - `ffmpeg-hevc.patch` (in `third_party/ffmpeg`): the FFmpeg configuration for
   Chrome/linux/x64 regenerated with the HEVC decoder and parser
@@ -51,8 +50,6 @@ path (apply after CEF's own patches):
 - `chromium-media-hevc.patch` (in `src`): the FFmpeg video decoder accepts HEVC (and
   picks its thread count like H.264), HEVC counts as a built-in codec, FFmpeg's
   allowed decoders include it, and `build_ffmpeg.py` keeps the flags.
-- `webrtc-h265-software.patch` (in `third_party/webrtc`): WebRTC's FFmpeg H.264
-  decoder also decodes H.265, and the built-in decoder factory offers H.265.
 
 Then `make_distrib` builds the minimal distribution. It is attached to a GitHub
 release of this repository; `docker/cef-codecs/cef.env` names its URL and SHA-1.

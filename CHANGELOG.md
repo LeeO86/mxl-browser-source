@@ -2,9 +2,9 @@
 
 ## Image variant 1.3.3-codecs
 
-- **H.264 and H.265 (proprietary codecs).** A second image, `<version>-codecs`, uses a CEF build of the same version with H.264 and H.265 decoding in software (`<video>`, MSE, WebRTC receive); the normal image cannot play them, so for example the WebRTC previews of other functions stayed black. The function itself is unchanged. **Licensing is the user's responsibility** ([`docs/proprietary-codecs.md`](docs/proprietary-codecs.md)).
+- **H.264 and H.265 (proprietary codecs).** A second image, `<version>-codecs`, uses a CEF build of the same version with H.264 (`<video>`, MSE, WebRTC receive) and H.265 (`<video>`, MSE) decoding in software; the normal image cannot play them, so for example the WebRTC previews of other functions stayed black. The function itself is unchanged. **Licensing is the user's responsibility** ([`docs/proprietary-codecs.md`](docs/proprietary-codecs.md)).
   - `docker/Dockerfile` takes `CEF_URL` (default: the CEF project's build as before); `docker/cef-codecs/` holds the patches and the URL and SHA-1 of the build; a tag `codecs-<version>` runs `.github/workflows/container-codecs.yaml`.
-  - Tests: `tests/codecs/codecs.html` (all OK in the variant: `<video>` and MSE for both codecs, WebRTC H.264 loopback, H.265 offered for WebRTC receive).
+  - Tests: `tests/codecs/codecs.html` (all OK in the variant: `<video>` and MSE for both codecs, WebRTC H.264 loopback; WebRTC H.265 is not offered).
 
 ## 1.3.3
 
