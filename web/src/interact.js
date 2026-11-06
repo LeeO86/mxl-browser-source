@@ -121,6 +121,9 @@ export class InteractClient {
   onMessage(data) {
     if (data instanceof ArrayBuffer) {
       if (data.byteLength <= 8) return;
+      // Flow control (SPEC §7.3): the server sends the next preview only when we have taken
+      // this one, so a buffering proxy on the path cannot hold seconds of them.
+      this.send({ type: "preview_ack" });
       const v = new DataView(data);
       const grain = v.getUint32(0, true) + v.getUint32(4, true) * 2 ** 32;
       this.h.frame?.(grain, new Blob([new Uint8Array(data, 8)], { type: "image/jpeg" }));

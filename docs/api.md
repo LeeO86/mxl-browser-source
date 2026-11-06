@@ -121,13 +121,13 @@ Our own routes:
 
 ## Preview
 
-`GET /api/v1/preview.jpg` → `image/jpeg`, the newest frame at `BROWSER_PREVIEW_WIDTH`, composited over a mid-grey checkerboard where transparent. The preview is made after the request arrives (up to 100 ms); only when none comes in time is the last one sent (503 before the first paint).
+`GET /api/v1/preview.jpg` → `image/jpeg`, the newest frame at `BROWSER_PREVIEW_WIDTH` and JPEG quality `BROWSER_PREVIEW_QUALITY` (75; also for the WebSocket preview), composited over a mid-grey checkerboard where transparent. The preview is made after the request arrives (up to 100 ms); only when none comes in time is the last one sent (503 before the first paint).
 
 ## Widgets
 
 No token (the page asks for it). SPEC §10.6.
 
-`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.3.4"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.3.4"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
+`GET /widgets` → `[{"id":"interaction","title":"Browser interaction","params":{"type":"object","properties":{}},"min_size":{"w":640,"h":400},"version":"1.4.0"},{"id":"ograf","title":"OGraf graphics","params":{"type":"object","properties":{"layers":{"type":"string",…}}},"min_size":{"w":640,"h":480},"version":"1.4.0"}]`, with `Access-Control-Allow-Origin: <Origin>` when `WIDGET_FRAME_ANCESTORS` lists that origin (or `*`) and always `Vary: Origin`. Other methods: 405.
 
 `GET /widget/interaction[?theme=dark|light|transparent]` and `GET /widget/ograf[?theme=…&layers=1,2]` → the UI page with only the interaction window, or the Graphics tab's preview, layers and form (only the listed layers; no library, upload or delete; `docs/ograf.md` §8), `Content-Security-Policy: frame-ancestors <WIDGET_FRAME_ANCESTORS>`, no `X-Frame-Options`. A bad `theme`: 400; another id: 404. Other query parameters are ignored.
 
@@ -194,7 +194,7 @@ Server → client:
 {"type":"error","code":"not_controller","message":"interaction is off for this session"}
 ```
 
-Binary frames: 8-byte little-endian grain index, then a JPEG (the preview), at `BROWSER_PREVIEW_FPS`. `preview` sets this session's rate: up to 25 while it controls the page, else up to `BROWSER_PREVIEW_FPS`; without `fps` it goes back to `BROWSER_PREVIEW_FPS`. Losing control drops the rate to at most `BROWSER_PREVIEW_FPS`. The UI asks for 25 while it controls the page. A client that does not keep up misses preview frames (never text messages); one that reads nothing for 5 s is closed. Schema: `docs/interact.schema.json`. `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down). A `down` focuses the page; the buttons that are down ride on every `move` until their `up` (a drag selects text), and `leave` or the end of control sends the `up` of a button still down.
+Binary frames: 8-byte little-endian grain index, then a JPEG (the preview), at `BROWSER_PREVIEW_FPS`. `preview` sets this session's rate: up to 25 while it controls the page, else up to `BROWSER_PREVIEW_FPS`; without `fps` it goes back to `BROWSER_PREVIEW_FPS`. Losing control drops the rate to at most `BROWSER_PREVIEW_FPS`. The UI asks for 25 while it controls the page. A client that does not keep up misses preview frames (never text messages); one that reads nothing for 5 s is closed. Flow control: a client that sends `{"type":"preview_ack"}` for each binary frame it receives has at most 2 previews unanswered, so a proxy on the path cannot hold seconds of them (the UI does this); one that then answers nothing for 5 s is closed. `preview_ack` is not counted against the input limit. Schema: `docs/interact.schema.json`. `controller` is `self`, `other` or `none`. Input without control answers `error` `not_controller`. Coordinates are 0…1 of the picture. Wheel deltas are pixels with the DOM sign (positive `dy` scrolls down). A `down` focuses the page; the buttons that are down ride on every `move` until their `up` (a drag selects text), and `leave` or the end of control sends the `up` of a button still down.
 
 ## DevTools (`BROWSER_DEVTOOLS=true` only)
 

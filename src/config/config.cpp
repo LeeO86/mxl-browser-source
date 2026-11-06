@@ -79,6 +79,7 @@ namespace mbs::config
                 {"BROWSER_URL_DENY", "", false, false, "Comma list of host globs and CIDRs, added to the built-in deny list"},
                 {"BROWSER_PREVIEW_FPS", "10", false, false, "Preview frames per second (1-25)"},
                 {"BROWSER_PREVIEW_WIDTH", "960", false, false, "Preview width in pixels"},
+                {"BROWSER_PREVIEW_QUALITY", "75", true, false, "JPEG quality of the previews (10-100); lower is smaller on a slow path"},
                 {"BROWSER_INTERACT_TIMEOUT_S", "120", false, false, "Interaction ends after this idle time"},
                 {"BROWSER_DEVTOOLS", "false", true, false, "DevTools proxy under /devtools/"},
                 {"BROWSER_DEVTOOLS_PORT", "9222", true, false, "Internal DevTools port (loopback only)"},
@@ -462,6 +463,7 @@ namespace mbs::config
         c.urlDeny = parseList(get("BROWSER_URL_DENY"));
         c.previewFps = parseInt("BROWSER_PREVIEW_FPS", get("BROWSER_PREVIEW_FPS"), 1, 25);
         c.previewWidth = parseInt("BROWSER_PREVIEW_WIDTH", get("BROWSER_PREVIEW_WIDTH"), 160, 1920);
+        c.previewQuality = parseInt("BROWSER_PREVIEW_QUALITY", get("BROWSER_PREVIEW_QUALITY"), 10, 100);
         c.interactTimeoutS = parseInt("BROWSER_INTERACT_TIMEOUT_S", get("BROWSER_INTERACT_TIMEOUT_S"), 5, 3600);
         c.devtools = parseBool("BROWSER_DEVTOOLS", get("BROWSER_DEVTOOLS"));
         c.devtoolsPort = parseInt("BROWSER_DEVTOOLS_PORT", get("BROWSER_DEVTOOLS_PORT"), 1, 65535);

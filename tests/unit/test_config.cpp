@@ -91,6 +91,14 @@ TEST_CASE("service workers are off unless enabled")
     CHECK(errorKey({{"BROWSER_SERVICE_WORKERS", "sometimes"}}) == "BROWSER_SERVICE_WORKERS");
 }
 
+TEST_CASE("preview JPEG quality: 75 by default, 10 to 100")
+{
+    CHECK(load({}, {}, "host").config.previewQuality == 75);
+    CHECK(load({{"BROWSER_PREVIEW_QUALITY", "50"}}, {}, "host").config.previewQuality == 50);
+    CHECK(errorKey({{"BROWSER_PREVIEW_QUALITY", "9"}}) == "BROWSER_PREVIEW_QUALITY");
+    CHECK(errorKey({{"BROWSER_PREVIEW_QUALITY", "101"}}) == "BROWSER_PREVIEW_QUALITY");
+}
+
 TEST_CASE("frame-loop settings: pipeline, real-time threads, conversion threads, WebGPU")
 {
     auto const d = load({}, {}, "host").config;

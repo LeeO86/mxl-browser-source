@@ -425,6 +425,27 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
     CHECK(!bigWs->sendText(std::string(WebSocket::kOutboxBytes + 1, 'x')));
     CHECK(!bigWs->open());
     ::close(bigFd);
+
+    // Previews held back by flow control (skipBinary) count like a full socket: closed after
+    // kStuckTimeout without a sent or answered preview; a sent one or an answer (binaryTaken)
+    // starts the time again.
+    auto [skipFd, skipWs] = connectSmall();
+    CHECK(skipWs->skipBinary() == WebSocket::Sent::Dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    CHECK(skipWs->sendBinary("p") == WebSocket::Sent::Yes);
+    CHECK(skipWs->skipBinary() == WebSocket::Sent::Dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    skipWs->binaryTaken();
+    auto const skipStart = std::chrono::steady_clock::now();
+    auto skipped = WebSocket::Sent::Dropped;
+    while (skipped == WebSocket::Sent::Dropped && std::chrono::steady_clock::now() - skipStart < WebSocket::kStuckTimeout * 2)
+    {
+        skipped = skipWs->skipBinary();
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    CHECK(skipped == WebSocket::Sent::Closed);
+    CHECK(std::chrono::steady_clock::now() - skipStart >= WebSocket::kStuckTimeout);
+    ::close(skipFd);
     server.stop();
     // Each stuck close was reported once, with its reason (the first client recovered). The
     // preview client's started frame waits in the outbox, so its age closes it.
@@ -435,5 +456,5 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
         reported += r + " ";
     }
     INFO(reported);
-    CHECK(stuckReasons == std::vector<std::string>{"outbox_age", "outbox_age", "outbox_size"});
+    CHECK(stuckReasons == std::vector<std::string>{"outbox_age", "outbox_age", "outbox_size", "preview_not_taken"});
 }

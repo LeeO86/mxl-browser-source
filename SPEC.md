@@ -362,7 +362,9 @@ Client → server (JSON Schema, draft 2020-12; the same schema as a file: `docs/
     {"type": "object", "required": ["type"], "properties": {
       "type": {"const": "preview"},
       "fps": {"type": "integer", "minimum": 1, "maximum": 25, "description": "omitted: back to BROWSER_PREVIEW_FPS"},
-      "width": {"type": "integer", "minimum": 160, "maximum": 1920}}}
+      "width": {"type": "integer", "minimum": 160, "maximum": 1920}}},
+    {"type": "object", "required": ["type"], "description": "one per preview frame received, never more; after the first, the server keeps at most 2 previews unacknowledged", "properties": {
+      "type": {"const": "preview_ack"}}}
   ],
   "$defs": {"modifiers": {"type": "array", "items": {"enum": ["shift", "ctrl", "alt", "meta", "capslock"]}, "uniqueItems": true}}
 }
@@ -380,7 +382,7 @@ Server → client:
 | `error` | `code`, `message` | rejected input, policy violations |
 | binary | 8-byte little-endian grain index, then a JPEG | preview frames |
 
-Limits: 200 input messages per second per session, 64 KiB per message; beyond that the server drops messages and counts them. Malformed messages get an `error` and are ignored.
+Limits: 200 input messages per second per session, 64 KiB per message; beyond that the server drops messages and counts them (`preview_ack` does not count and is never dropped). Malformed messages get an `error` and are ignored.
 
 ### 7.3 Preview
 
@@ -388,7 +390,8 @@ The siblings preview with low-rate JPEG (multiviewer `/preview.jpg` at 5 fps and
 
 - `GET /api/v1/preview.jpg`: the newest frame, converted after the request arrives (each request gets a ticket and is answered with a preview made for it or a later one; 1.1.0 answered with the previous request's picture), encoded once per preview.
 - Preview frames over the interaction WebSocket (each a preview made after it was due, waited for up to 100 ms like `preview.jpg`; a session never gets the same picture twice, 1.3.4) at `BROWSER_PREVIEW_FPS` (default 10, up to 25 while the session controls the page) and `BROWSER_PREVIEW_WIDTH` (default 960). A session asks for its rate with `preview` (a watcher can only lower it); the UI asks for 25 when its session gets control and for the default (`preview` without `fps`) when it loses it. The server also drops a session to at most `BROWSER_PREVIEW_FPS` when it loses control (toggle off, take-over, timeout), so only the controller can have more.
-- A client that stops reading never slows the others. Preview frames are sent without waiting: when a client's socket is full, its frame is dropped (the next one is newer; `preview_frames_dropped_total`), and a frame that has started goes out whole before anything else. Text messages (state, acks, errors, events) keep their order and are never dropped: what does not fit waits in a per-client outbox that the connection's own thread drains, so no sender ever waits for a client (state, cursor and console broadcasts come from the CEF UI thread, where a wait could trip the hang timeout). A client whose outbox holds more than 4 MiB or whose oldest message has waited 5 s, or that takes no preview frame for 5 s, is closed, which ends its control; such a close is logged (`websocket_stuck_close` with the client and reason) and counted (`websocket_stuck_closes_total{reason}`). The kernel keeps at most 64 KiB of a WebSocket unsent (`TCP_NOTSENT_LOWAT`), so on a slow path previews are dropped early instead of waiting seconds in the send buffer. This holds for `/api/v1/events` too. Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
+- A client that stops reading never slows the others. Preview frames are sent without waiting: when a client's socket is full, its frame is dropped (the next one is newer; `preview_frames_dropped_total`), and a frame that has started goes out whole before anything else. Text messages (state, acks, errors, events) keep their order and are never dropped: what does not fit waits in a per-client outbox that the connection's own thread drains, so no sender ever waits for a client (state, cursor and console broadcasts come from the CEF UI thread, where a wait could trip the hang timeout). A client whose outbox holds more than 4 MiB or whose oldest message has waited 5 s, or that takes no preview frame for 5 s, is closed, which ends its control; such a close is logged (`websocket_stuck_close` with the client, the interaction session (0 on `/api/v1/events`), the reason, the outbox bytes and the age of the oldest waiting message, `oldest_ms`) and counted (`websocket_stuck_closes_total{reason}`). The kernel keeps at most 32 KiB of a WebSocket unsent (`TCP_NOTSENT_LOWAT`; 64 KiB in 1.3.4), so on a slow path previews are dropped early instead of waiting seconds in the send buffer. This holds for `/api/v1/events` too.
+- Preview flow control (after 1.3.4): the kernel limit does not help when a proxy sits on the path, because the proxy reads at once and holds the previews in its own buffers (lab, 2 Mbit/s behind a buffering proxy: 10 s old previews with 1.3.4). A client that answers each preview frame with `preview_ack` therefore has at most 2 previews unanswered; while it has 2, a new picture skips it (counted in `preview_frames_dropped_total`; an unchanged picture is not counted), so the newest picture goes out as soon as an answer comes back. Every preview counts from the first one on, also those sent before the first `preview_ack`: what a proxy buffered then is answered (drained) before new ones go out. An answer counts as reading: a session is closed as `preview_not_taken` only when new pictures were skipped for 5 s without an answer. A client that never sends `preview_ack` is not limited (as before). The web UI and the widgets answer every frame as it arrives. An extra `preview_ack` (for no frame) is ignored when no preview is unanswered; otherwise it is taken for a preview still on the way and lets one more through until the client has caught up (lab: an extra ack before the first frame, while a preview was already on the way, raised the age at 2 Mbit/s from 230 to 390 ms). Polling a JPEG adds a round trip per frame; a push keeps the click-to-picture time short. WebRTC is not used: full-rate monitoring is mxl-webrtc-monitor's job (route the video flow to it).
 - The preview is made from the BGRA frame (downscaled box filter, composited over a checkerboard in the UI when transparent), so it costs nothing when no client watches.
 
 ## 8. NMOS
@@ -616,6 +619,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
 | `BROWSER_CONFIRM_DIALOGS` | `cancel` | no | `cancel`, `accept` |
 | `BROWSER_URL_ALLOW` / `_DENY` | empty / §14.3 | no | URL policy lists |
 | `BROWSER_PREVIEW_FPS` / `_WIDTH` | 10 / 960 | no | preview |
+| `BROWSER_PREVIEW_QUALITY` | 75 | yes | JPEG quality of the previews (10–100); lower makes them smaller on a slow path |
 | `BROWSER_INTERACT_TIMEOUT_S` | 120 | no | control ends after this idle time |
 | `BROWSER_DEVTOOLS` | `false` | yes | DevTools proxy |
 | `BROWSER_DEVTOOLS_PORT` | 9222 | yes | internal DevTools port (loopback) |
@@ -688,7 +692,7 @@ Prefix `mxl_browser_source_`. Durations in seconds with millisecond buckets.
 | `interact_sessions` | gauge | – (controlling sessions, 0 or 1) |
 | `interaction_events_total` | counter | `type`, `result` (`ok`, `rejected`, `dropped`) |
 | `preview_frames_total` | counter | – (preview frames sent; until 1.3.1 also those a blocked client never took) |
-| `preview_frames_dropped_total` | counter | – (preview frames dropped because the client's socket was full, §7.3) |
+| `preview_frames_dropped_total` | counter | – (preview frames dropped because the client's socket was full or, with `preview_ack`, 2 previews were unanswered, §7.3) |
 | `websocket_stuck_closes_total` | counter | `reason` (`outbox_size`, `outbox_age`, `preview_not_taken`; WebSockets closed because the client did not read, §7.3; 1.3.4) |
 | `devtools_sessions` | gauge | – |
 | `sender_enabled` | gauge | `sender` |

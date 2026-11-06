@@ -262,6 +262,44 @@ namespace mbs::ops
         return rates;
     }
 
+    bool InteractHub::isPreviewAck(std::string const& raw)
+    {
+        // Cheap: a size and substring check; only such a short message is parsed.
+        if (raw.size() > 64 || raw.find("preview_ack") == std::string::npos)
+        {
+            return false;
+        }
+        picojson::value doc;
+        return picojson::parse(doc, raw).empty() && doc.is<picojson::object>() && text(doc.get<picojson::object>(), "type") == "preview_ack";
+    }
+
+    bool InteractHub::previewWindowOpen(int id) const
+    {
+        std::lock_guard lock{_mutex};
+        auto const found = _sessions.find(id);
+        return found == _sessions.end() || !found->second.previewAcks || found->second.previewUnacked < kPreviewWindow;
+    }
+
+    void InteractHub::previewSending(int id)
+    {
+        std::lock_guard lock{_mutex};
+        auto const found = _sessions.find(id);
+        if (found != _sessions.end())
+        {
+            ++found->second.previewUnacked; // before it goes out, so its ack cannot come first
+        }
+    }
+
+    void InteractHub::previewNotSent(int id)
+    {
+        std::lock_guard lock{_mutex};
+        auto const found = _sessions.find(id);
+        if (found != _sessions.end() && found->second.previewUnacked > 0)
+        {
+            --found->second.previewUnacked;
+        }
+    }
+
     int InteractHub::sessions() const
     {
         std::lock_guard lock{_mutex};
@@ -297,6 +335,14 @@ namespace mbs::ops
                 count(type, "rejected");
                 out.emplace_back(session.peer.sendText, errorJson(code, why));
             };
+
+            // Preview acks are flow control, not input: the input limit does not drop them.
+            if (isPreviewAck(raw))
+            {
+                session.previewAcks = true;
+                session.previewUnacked = std::max(0, session.previewUnacked - 1);
+                return;
+            }
 
             // Input limit per session: beyond it, messages are dropped (one error per second).
             if (now - session.windowStart >= std::chrono::seconds(1))
