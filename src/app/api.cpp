@@ -430,9 +430,13 @@ namespace mbs::app
             std::lock_guard lock{_socketsMutex};
             _interactSockets[*session] = socket;
         };
-        h.message = [this, session](std::shared_ptr<ops::WebSocket> const&, std::string const& message, bool binary) {
+        h.message = [this, session](std::shared_ptr<ops::WebSocket> const& socket, std::string const& message, bool binary) {
             if (!binary)
             {
+                if (ops::InteractHub::isPreviewAck(message))
+                {
+                    socket->binaryTaken(); // it reads, also while its window is shut
+                }
                 _interact->message(*session, message);
             }
         };

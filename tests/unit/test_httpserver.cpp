@@ -427,11 +427,15 @@ TEST_CASE("WebSocket: a client that stops reading never blocks a send; text stay
     ::close(bigFd);
 
     // Previews held back by flow control (skipBinary) count like a full socket: closed after
-    // kStuckTimeout without a sent preview; a sent one starts the time again.
+    // kStuckTimeout without a sent or answered preview; a sent one or an answer (binaryTaken)
+    // starts the time again.
     auto [skipFd, skipWs] = connectSmall();
     CHECK(skipWs->skipBinary() == WebSocket::Sent::Dropped);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     CHECK(skipWs->sendBinary("p") == WebSocket::Sent::Yes);
+    CHECK(skipWs->skipBinary() == WebSocket::Sent::Dropped);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    skipWs->binaryTaken();
     auto const skipStart = std::chrono::steady_clock::now();
     auto skipped = WebSocket::Sent::Dropped;
     while (skipped == WebSocket::Sent::Dropped && std::chrono::steady_clock::now() - skipStart < WebSocket::kStuckTimeout * 2)

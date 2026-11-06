@@ -284,6 +284,44 @@ TEST_CASE("preview flow control: a session that acks has at most two previews un
     CHECK(a.received.size() == 1); // only the state on open: acks get no answer
 }
 
+TEST_CASE("preview flow control: previews sent before the first ack are drained first")
+{
+    // A proxy buffered 9 previews before the client's first ack came back: the window stays
+    // shut until the client has answered all but one of them, then it holds 2 again.
+    FakePage page;
+    InteractHub hub(settings(), page);
+    Client a;
+    int const id = hub.open(a.peer());
+    for (int i = 0; i < 9; ++i)
+    {
+        hub.previewSending(id);
+    }
+    hub.message(id, R"({"type":"preview_ack"})");
+    for (int i = 0; i < 7; ++i)
+    {
+        CHECK(!hub.previewWindowOpen(id));
+        hub.message(id, R"({"type":"preview_ack"})");
+    }
+    CHECK(hub.previewWindowOpen(id));
+    hub.previewSending(id);
+    CHECK(!hub.previewWindowOpen(id));
+    hub.message(id, R"({"type":"preview_ack"})");
+    hub.message(id, R"({"type":"preview_ack"})");
+    hub.message(id, R"({"type":"preview_ack"})"); // one too many: nothing unanswered, ignored
+    hub.previewSending(id);
+    hub.previewSending(id);
+    CHECK(!hub.previewWindowOpen(id));
+}
+
+TEST_CASE("preview flow control: only a short preview_ack message is one")
+{
+    CHECK(InteractHub::isPreviewAck(R"({"type":"preview_ack"})"));
+    CHECK_FALSE(InteractHub::isPreviewAck(R"({"type":"text","text":"preview_ack"})"));
+    CHECK_FALSE(InteractHub::isPreviewAck(R"({"type":"preview"})"));
+    CHECK_FALSE(InteractHub::isPreviewAck(R"({"type":"preview_ack")"));
+    CHECK_FALSE(InteractHub::isPreviewAck(R"({"type":"preview_ack","pad":")" + std::string(100, 'x') + R"("})"));
+}
+
 TEST_CASE("preview flow control: the input limit does not drop acks")
 {
     FakePage page;

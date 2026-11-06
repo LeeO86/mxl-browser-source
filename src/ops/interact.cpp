@@ -262,6 +262,17 @@ namespace mbs::ops
         return rates;
     }
 
+    bool InteractHub::isPreviewAck(std::string const& raw)
+    {
+        // Cheap: a size and substring check; only such a short message is parsed.
+        if (raw.size() > 64 || raw.find("preview_ack") == std::string::npos)
+        {
+            return false;
+        }
+        picojson::value doc;
+        return picojson::parse(doc, raw).empty() && doc.is<picojson::object>() && text(doc.get<picojson::object>(), "type") == "preview_ack";
+    }
+
     bool InteractHub::previewWindowOpen(int id) const
     {
         std::lock_guard lock{_mutex};
@@ -325,11 +336,8 @@ namespace mbs::ops
                 out.emplace_back(session.peer.sendText, errorJson(code, why));
             };
 
-            picojson::value doc;
-            std::string const parseError = picojson::parse(doc, raw);
-            bool const valid = parseError.empty() && doc.is<picojson::object>();
             // Preview acks are flow control, not input: the input limit does not drop them.
-            if (valid && text(doc.get<picojson::object>(), "type") == "preview_ack")
+            if (isPreviewAck(raw))
             {
                 session.previewAcks = true;
                 session.previewUnacked = std::max(0, session.previewUnacked - 1);
@@ -352,7 +360,9 @@ namespace mbs::ops
             }
             else
             {
-                if (!valid)
+                picojson::value doc;
+                std::string const parseError = picojson::parse(doc, raw);
+                if (!parseError.empty() || !doc.is<picojson::object>())
                 {
                     reject("invalid", "bad_message", "not a JSON object");
                 }

@@ -80,6 +80,9 @@ namespace mbs::ops
         /// A binary frame the caller held back because the client has not taken the previous
         /// ones (preview flow control): counts towards kStuckTimeout like a full socket.
         Sent skipBinary();
+        /// The client answered a binary frame (preview flow control): it reads, so the time
+        /// towards kStuckTimeout starts again, as when a frame goes out.
+        void binaryTaken();
         /// The interaction session on this socket, for the stuck-close log line (0: none, events).
         void setSession(int session);
         /// Sends a close frame and shuts the socket down; the reader thread ends.

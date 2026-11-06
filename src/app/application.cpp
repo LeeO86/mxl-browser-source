@@ -1503,28 +1503,17 @@ namespace mbs::app
             }
             std::erase_if(due, [&](auto const& entry) { return rates.count(entry.first) == 0; });
             std::erase_if(shown, [&](auto const& entry) { return rates.count(entry.first) == 0; });
-            // A session that has not acknowledged its previews misses this one (SPEC §7.3).
+            // A session that has not acknowledged its previews misses a new picture (SPEC §7.3).
+            std::vector<int> held;
             std::erase_if(ready, [&](int id) {
                 if (_interact->previewWindowOpen(id))
                 {
                     return false;
                 }
-                std::shared_ptr<ops::WebSocket> socket;
-                {
-                    std::lock_guard lock{_socketsMutex};
-                    auto it = _interactSockets.find(id);
-                    if (it != _interactSockets.end())
-                    {
-                        socket = it->second;
-                    }
-                }
-                if (socket && socket->skipBinary() == ops::WebSocket::Sent::Dropped)
-                {
-                    _metrics.inc("preview_frames_dropped_total", {}, 1);
-                }
+                held.push_back(id);
                 return true;
             });
-            if (ready.empty())
+            if (ready.empty() && held.empty())
             {
                 continue;
             }
@@ -1560,8 +1549,18 @@ namespace mbs::app
             }
             frame += jpeg;
             std::vector<std::pair<int, std::shared_ptr<ops::WebSocket>>> targets;
+            std::vector<std::shared_ptr<ops::WebSocket>> skipped;
             {
                 std::lock_guard lock{_socketsMutex};
+                for (int id : held)
+                {
+                    // Only a picture it has not had counts as missed: a static page closes no one.
+                    auto it = _interactSockets.find(id);
+                    if (it != _interactSockets.end() && shown[id] != jpegSequence)
+                    {
+                        skipped.push_back(it->second);
+                    }
+                }
                 for (int id : ready)
                 {
                     auto it = _interactSockets.find(id);
@@ -1575,6 +1574,10 @@ namespace mbs::app
             // Never blocks: a client whose socket is full misses this frame (SPEC §7.3).
             int sent = 0;
             int dropped = 0;
+            for (auto const& socket : skipped)
+            {
+                dropped += socket->skipBinary() == ops::WebSocket::Sent::Dropped ? 1 : 0;
+            }
             for (auto const& [id, socket] : targets)
             {
                 _interact->previewSending(id);

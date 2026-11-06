@@ -375,6 +375,12 @@ namespace mbs::ops
         return _open.load() ? dropped(Clock::now()) : Sent::Closed;
     }
 
+    void WebSocket::binaryTaken()
+    {
+        std::lock_guard lock{_sendMutex};
+        _dropping = false;
+    }
+
     void WebSocket::setSession(int session)
     {
         std::lock_guard lock{_sendMutex};
