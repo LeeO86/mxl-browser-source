@@ -1,7 +1,7 @@
 name: Container (H.264/H.265)
 
 # The image variant with a CEF build that plays H.264 and H.265 (docs/proprietary-codecs.md).
-# A tag codecs-<version> (for example codecs-1.3.4) builds that commit and pushes
+# A tag codecs-<version> (for example codecs-1.4.0) builds that commit and pushes
 # <version>-codecs. Normal releases (v*.*.*) are not touched.
 on:
   push:

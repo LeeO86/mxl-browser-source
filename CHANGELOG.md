@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-11-06)
 
 - **Interaction preview stays current on a slow path, also behind a proxy** (SPEC §7.2, §7.3). 1.3.4 limits what the kernel holds unsent, but a reverse proxy between the function and the browser reads everything at once and holds the previews in its own buffers: in the lab (2 Mbit/s behind a buffering proxy, 50 KB previews) they arrived 10–11 s old; at 500 kbit/s the delay grew to 14 s and the session was closed as stuck after 20 s, which ended its control.
   - **Preview flow control:** a client that answers each preview frame with `{"type":"preview_ack"}` has at most 2 previews unanswered; a new picture skips it until an answer comes (counted in `preview_frames_dropped_total`) and then the newest picture goes out. Previews sent before the first answer count too, so what a proxy buffered then is drained first. A session is closed as `preview_not_taken` only when new pictures were skipped for 5 s without an answer (a static page closes no one). Clients that never send `preview_ack` work as before. The web UI and the widgets answer every frame. `preview_ack` is not counted against the input limit.
