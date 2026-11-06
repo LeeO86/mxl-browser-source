@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Interaction preview stays current on a slow path, also behind a proxy** (SPEC §7.2, §7.3). 1.3.4 limits what the kernel holds unsent, but a reverse proxy between the function and the browser reads everything at once and holds the previews in its own buffers: in the lab (2 Mbit/s behind a buffering proxy, 50 KB previews) they arrived 10–11 s old; at 500 kbit/s the delay grew to 14 s and the session was closed as stuck after 20 s, which ended its control.
+  - **Preview flow control:** a client that answers each preview frame with `{"type":"preview_ack"}` has at most 2 previews unanswered; the server skips it until an answer comes (counted in `preview_frames_dropped_total`) and then sends the newest picture. A session that answers nothing for 5 s is closed as `preview_not_taken`. Clients that never send `preview_ack` work as before. The web UI and the widgets answer every frame. `preview_ack` is not counted against the input limit.
+  - **Kernel limit 32 KiB** instead of 64 KiB (`TCP_NOTSENT_LOWAT`): measured with 16, 32, 64 and 128 KiB at 2 Mbit/s and 40 ms; 16 and 32 KiB were equal and best, with no frame-rate loss at 6 and 16 Mbit/s.
+  - Lab, preview age at the client (median), 25 fps asked, 50 KB previews, 40 ms round trip: direct at 2 Mbit/s 2.8 s (1.3.3), 0.79 s (1.3.4), 0.36 s now; behind the proxy at 2 Mbit/s 10.1 s (1.3.4), 0.22 s now; behind the proxy at 500 kbit/s 14 s and closed (1.3.4), 1.1 s and control kept for 60 s now. Cost: on a 16 Mbit/s path with 40 ms round trip the preview runs at 17 instead of 22 fps (and is 54 instead of 80 ms old); on a LAN nothing changes.
+  - **Stuck-close log line:** `websocket_stuck_close` now also has the interaction `session` (0 on `/api/v1/events`) and `oldest_ms`, the age of the oldest waiting message. The counter `websocket_stuck_closes_total{reason}` is unchanged.
+  - Tests: unit tests for the window (per session, acks before the next send, a frame that was not sent, acks past the input limit) and for a held-back preview counting towards the stuck close; `tests/unit/web/interact.test.mjs` (the UI answers every frame; `preview_ack` in the schema); `tests/integration/interact_test.py` (2 previews unanswered, 1 more per answer, closed and counted 5 s after the last).
+- **`BROWSER_PREVIEW_QUALITY`** (default 75, 10–100, restart): the JPEG quality of the previews (`preview.jpg` and the interaction preview). Lower makes each picture smaller, so a slow link carries more of them.
+
 ## 1.3.4 (2026-11-05)
 
 - **Interaction preview shows every new picture** (SPEC §7.3). The WebSocket preview waited only 20 ms for a new preview and otherwise sent the previous JPEG again: on a busy page (YouTube on test-all-gfx) about 2 of 9 frames per second were new, so the preview stood still for seconds. It now waits for the preview like `preview.jpg` (up to 100 ms), and a session never gets the same picture twice.

@@ -240,6 +240,18 @@
           "maximum": 1920
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "description": "one per preview frame received, never more; after the first, the server keeps at most 2 previews unacknowledged",
+      "properties": {
+        "type": {
+          "const": "preview_ack"
+        }
+      }
     }
   ],
   "$defs": {

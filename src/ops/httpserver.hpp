@@ -52,8 +52,9 @@ namespace mbs::ops
     /// one is newer); one that has started is finished first. A client that takes no binary
     /// frame for kStuckTimeout is closed too. Such a "stuck" close is logged and reported to
     /// `onStuck` with its reason (outbox_size, outbox_age, preview_not_taken).
-    /// The kernel keeps at most kUnsentBytes unsent (TCP_NOTSENT_LOWAT), so a slow path drops
-    /// previews early instead of holding seconds of them in the send buffer.
+    /// The kernel keeps at most kUnsentBytes unsent (TCP_NOTSENT_LOWAT, about two thirds of a
+    /// 960 px preview), so a slow path drops previews early instead of holding seconds of them
+    /// in the send buffer.
     class WebSocket
     {
     public:
@@ -64,7 +65,7 @@ namespace mbs::ops
 
         static constexpr std::chrono::milliseconds kStuckTimeout{5000};
         static constexpr std::size_t kOutboxBytes = 4 * 1024 * 1024;
-        static constexpr int kUnsentBytes = 64 * 1024;
+        static constexpr int kUnsentBytes = 32 * 1024;
 
         enum class Sent
         {
@@ -76,6 +77,11 @@ namespace mbs::ops
         /// Queues the message; false when the socket is (or got) closed.
         bool sendText(std::string_view text);
         Sent sendBinary(std::string_view data);
+        /// A binary frame the caller held back because the client has not taken the previous
+        /// ones (preview flow control): counts towards kStuckTimeout like a full socket.
+        Sent skipBinary();
+        /// The interaction session on this socket, for the stuck-close log line (0: none, events).
+        void setSession(int session);
         /// Sends a close frame and shuts the socket down; the reader thread ends.
         void close(int code = 1000);
         [[nodiscard]] bool open() const { return _open.load(); }
@@ -104,6 +110,7 @@ namespace mbs::ops
         std::deque<Frame> _outbox;
         std::size_t _outboxBytes = 0;
         bool _dropping = false;
+        int _session = 0;
         Clock::time_point _droppingSince;
         std::string _peer;
         std::function<void(char const*)> _onStuck;

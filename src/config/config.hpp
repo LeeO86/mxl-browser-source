@@ -128,6 +128,7 @@ namespace mbs::config
         std::vector<std::string> urlDeny;
         int previewFps = 10;
         int previewWidth = 960;
+        int previewQuality = 75;
         int interactTimeoutS = 120;
         bool devtools = false;
         int devtoolsPort = 9222;

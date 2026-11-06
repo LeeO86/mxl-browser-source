@@ -426,6 +426,7 @@ namespace mbs::app
                                                                   return s && s->sendText(text);
                                                               },
                 socket->peer()});
+            socket->setSession(*session);
             std::lock_guard lock{_socketsMutex};
             _interactSockets[*session] = socket;
         };
@@ -771,7 +772,7 @@ namespace mbs::app
                 std::lock_guard lock{_jpegMutex};
                 if (!rgb.empty() && sequence != _jpegSequence)
                 {
-                    _jpeg = encodeJpeg(rgb, static_cast<int>(_engine->previewWidth()), static_cast<int>(_engine->previewHeight()));
+                    _jpeg = encodeJpeg(rgb, static_cast<int>(_engine->previewWidth()), static_cast<int>(_engine->previewHeight()), _cfg.previewQuality);
                     _jpegSequence = sequence;
                 }
                 jpeg = _jpeg;

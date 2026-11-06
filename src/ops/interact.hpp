@@ -87,6 +87,15 @@ namespace mbs::ops
 
         /// Preview rate each session asked for (0: none); the controller gets up to maxPreviewFps.
         [[nodiscard]] std::map<int, int> previewRates() const;
+        /// Preview flow control (SPEC §7.3): a session that answers previews with `preview_ack`
+        /// has at most kPreviewWindow of them unanswered, so a buffering proxy on its path cannot
+        /// hold seconds of them. False while it has that many. A session that never sent an ack
+        /// is always open.
+        [[nodiscard]] bool previewWindowOpen(int session) const;
+        /// Call before a preview goes out to `session`, and previewNotSent when it did not.
+        void previewSending(int session);
+        void previewNotSent(int session);
+        static constexpr int kPreviewWindow = 2;
         [[nodiscard]] int sessions() const;
         [[nodiscard]] bool controlled() const;
         [[nodiscard]] InteractCounters counters() const;
@@ -96,6 +105,8 @@ namespace mbs::ops
         {
             Peer peer;
             int previewFps = 0;
+            bool previewAcks = false; // the client sent a preview_ack
+            int previewUnacked = 0;
             Clock::time_point windowStart{};
             int windowCount = 0;
         };

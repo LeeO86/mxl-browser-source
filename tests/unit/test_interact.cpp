@@ -248,3 +248,57 @@ TEST_CASE("preview rates: losing control drops the controller's rate to the defa
     CHECK(!hub.controlled());
     CHECK(hub.previewRates().at(idb) == 10);
 }
+
+TEST_CASE("preview flow control: a session that acks has at most two previews unanswered")
+{
+    FakePage page;
+    InteractHub hub(settings(), page);
+    Client a;
+    Client b;
+    int const ida = hub.open(a.peer());
+    int const idb = hub.open(b.peer());
+    for (int i = 0; i < 5; ++i) // no ack yet: no limit
+    {
+        CHECK(hub.previewWindowOpen(ida));
+        hub.previewSending(ida);
+    }
+    for (int i = 0; i < 5; ++i)
+    {
+        hub.message(ida, R"({"type":"preview_ack"})");
+    }
+    CHECK(hub.previewWindowOpen(ida));
+    hub.previewSending(ida);
+    hub.previewSending(ida);
+    CHECK(!hub.previewWindowOpen(ida));
+    CHECK(hub.previewWindowOpen(idb)); // per session
+    hub.message(ida, R"({"type":"preview_ack"})");
+    CHECK(hub.previewWindowOpen(ida));
+    hub.previewSending(ida);
+    CHECK(!hub.previewWindowOpen(ida));
+    hub.previewNotSent(ida); // the socket was full: it does not count
+    CHECK(hub.previewWindowOpen(ida));
+    hub.previewSending(ida);
+    hub.message(ida, R"({"type":"preview_ack"})"); // an ack can come before the next send
+    hub.message(ida, R"({"type":"preview_ack"})");
+    CHECK(hub.previewWindowOpen(ida));
+    CHECK(a.received.size() == 1); // only the state on open: acks get no answer
+}
+
+TEST_CASE("preview flow control: the input limit does not drop acks")
+{
+    FakePage page;
+    InteractHub hub(settings(), page);
+    Client a;
+    int const id = hub.open(a.peer());
+    auto const t0 = InteractHub::Clock::now();
+    hub.message(id, R"({"type":"preview_ack"})", t0);
+    for (int i = 0; i < 250; ++i)
+    {
+        hub.message(id, R"({"type":"pointer","action":"move","x":0.5,"y":0.5})", t0);
+    }
+    hub.previewSending(id);
+    hub.previewSending(id);
+    CHECK(!hub.previewWindowOpen(id));
+    hub.message(id, R"({"type":"preview_ack"})", t0);
+    CHECK(hub.previewWindowOpen(id));
+}

@@ -47,6 +47,7 @@ The most used settings (all of them, with defaults and "restart required" marker
 | `BROWSER_FRAME_CLOCK_PHASE_MS` | `0` | internal frame clock: its BeginFrames this many ms after each grain start |
 | `BROWSER_REALTIME` | `true` | tick and converter threads `SCHED_FIFO` when the container allows it: give it `--ulimit rtprio=10` (Compose `ulimits: {rtprio: 10}`); `--cap-add SYS_NICE` alone does not help a non-root process (SPEC §2.2) |
 | `BROWSER_CONVERT_THREADS` | `4` | threads that convert one frame (1–16) |
+| `BROWSER_PREVIEW_QUALITY` | `75` | JPEG quality of the previews (10–100); lower makes each picture smaller, so a slow link carries more of them |
 | `BROWSER_AUDIO_BUFFER_MAX_MS` | `300` | adaptive audio buffer: when Chromium delivers audio late, the 60 ms target (`BROWSER_AUDIO_BUFFER_MS`) rises by the silence played, up to this, and the video delay follows; it falls back at 1 ms/s after 10 s without an underrun. At or below `BROWSER_AUDIO_BUFFER_MS` the target is fixed (SPEC §6) |
 | `BROWSER_OGRAF_DIR` | `<state>/ograf` | the OGraf graphics library (on the `/config` volume) |
 | `BROWSER_OGRAF_UPLOAD_MAX_MB` | `256` | largest graphics ZIP (unpacked at most 4×) |
@@ -57,6 +58,8 @@ The most used settings (all of them, with defaults and "restart required" marker
 The page to show, its CSS and JavaScript, zoom, background and presets are the source document (`/api/v1/source`, saved in `/config/config.json`); changes apply at once. Pages in `/config/templates` are served at `https://templates.local/…` without network access; the image ships `blank.html`, `bars.html`, `lower-third.html` and the test pages (`counter.html`, `avsync.html`, `tone.html`, `transparency.html`, `slow.html`, `hang.html`, `interact.html`, `dialogs.html`, `popup.html`, `download.html`, `permissions.html`).
 
 The preview on the Source page is the interaction window: back, forward and reload, and with "Interact" on, mouse (drag to select text, double and triple click), keys, text and IME go to the page and the preview runs at 25 fps instead of `BROWSER_PREVIEW_FPS`.
+
+On a slow link the preview stays current instead of falling behind: the server always sends the newest picture and skips the ones the link cannot carry. Two things keep old pictures from piling up on the way. The kernel holds at most 32 KiB of a WebSocket unsent (`TCP_NOTSENT_LOWAT`), and the UI answers each picture (`preview_ack`), so at most 2 are on the way at once, also through a proxy. A client that stops reading or answering for 5 s is closed, which ends its control; the log line `websocket_stuck_close` names the client, the session and the reason, and `websocket_stuck_closes_total{reason}` counts it (`outbox_size`, `outbox_age`, `preview_not_taken`).
 
 Operator screens can frame the interaction window as a widget: `GET /widgets` lists it (`interaction`, no parameters, `min_size` 640×400) and `GET /widget/interaction[?theme=dark|light|transparent]` is the page. It talks only to this instance's own origin (REST and both WebSockets on `WEB_PORT`), asks for `BROWSER_API_TOKEN` when one is set, and posts `widget-ready` and `widget-size` to its parent. Only the pages that `WIDGET_FRAME_ANCESTORS` names may frame it; on the platform set it to `'self' https://designer.<fqdn>`.
 

@@ -276,7 +276,9 @@ namespace mbs::ops
 
     void WebSocket::stuck(char const* reason)
     {
-        log::warn("websocket_stuck_close", {{"client", _peer}, {"reason", reason}, {"outbox_bytes", static_cast<std::uint64_t>(_outboxBytes)}});
+        auto const oldest = _outbox.empty() ? Clock::duration{} : Clock::now() - _outbox.front().queued;
+        log::warn("websocket_stuck_close", {{"client", _peer}, {"session", _session}, {"reason", reason}, {"outbox_bytes", static_cast<std::uint64_t>(_outboxBytes)},
+                                               {"oldest_ms", static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(oldest).count())}});
         if (_onStuck)
         {
             _onStuck(reason);
@@ -365,6 +367,18 @@ namespace mbs::ops
         }
         _dropping = false;
         return Sent::Yes;
+    }
+
+    WebSocket::Sent WebSocket::skipBinary()
+    {
+        std::lock_guard lock{_sendMutex};
+        return _open.load() ? dropped(Clock::now()) : Sent::Closed;
+    }
+
+    void WebSocket::setSession(int session)
+    {
+        std::lock_guard lock{_sendMutex};
+        _session = session;
     }
 
     void WebSocket::close(int code)

@@ -89,3 +89,22 @@ test("the preview messages are in docs/interact.schema.json", () => {
   assert.deepEqual(preview.required, ["type"], "fps must be optional (omitted: the default)");
   assert.ok(preview.properties.fps.maximum >= 25);
 });
+
+test("acknowledges every preview frame, before it is shown", () => {
+  const frames = [];
+  const client = new InteractClient({ frame: (grain) => frames.push(grain) });
+  client.connect();
+  const ws = FakeSocket.last;
+  ws.open();
+  for (const grain of [7, 8]) {
+    const data = new ArrayBuffer(12);
+    new DataView(data).setUint32(0, grain, true);
+    ws.onmessage({ data });
+  }
+  ws.onmessage({ data: new ArrayBuffer(8) }); // no picture: no ack
+  assert.deepEqual(frames, [7, 8]);
+  assert.deepEqual(ws.sent.filter((m) => m.type === "preview_ack"), [{ type: "preview_ack" }, { type: "preview_ack" }]);
+  const schema = JSON.parse(readFileSync(new URL("../../../docs/interact.schema.json", import.meta.url), "utf8"));
+  assert.ok(schema.oneOf.some((s) => s.properties.type.const === "preview_ack"), "no preview_ack in the schema");
+  client.close();
+});

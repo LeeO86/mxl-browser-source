@@ -58,7 +58,7 @@ namespace mbs::app
     };
 
     /// RGB24 → JPEG (stb), for the preview.
-    std::string encodeJpeg(std::vector<std::uint8_t> const& rgb, int width, int height, int quality = 75);
+    std::string encodeJpeg(std::vector<std::uint8_t> const& rgb, int width, int height, int quality);
 
     class Application final : public cef::PageObserver
     {

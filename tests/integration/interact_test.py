@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Interaction test (SPEC §17): drives interact.html through /api/v1/interact and checks the
 page's reports on /api/v1/events: clicks, keys, text, IME, wheel, then text selection (drag, Ctrl+C,
-double and triple click), then a client that stops reading (it must not slow the controller's preview)
-and the preview rates (watcher, controller, after take-over and release). With a container and its
-domain directory it also reads the selection highlight from the newest video grain (`docker exec …
-mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard library only.
+double and triple click), then a client that stops reading (it must not slow the controller's preview),
+the preview rates (watcher, controller, after take-over and release) and the preview flow control.
+With a container and its domain directory it also reads the selection highlight from the newest
+video grain (`docker exec … mxl-bs-grain-reader`, `DOCKER='sudo docker'` if needed). Standard
+library only.
 
     interact_test.py [host:port] [container domain-dir]
 """
@@ -257,6 +258,29 @@ def stuck_client(host, port, observer):
     c.close()
 
 
+def preview_flow_control(host, port):
+    """SPEC §7.3: a session that answers previews with `preview_ack` has at most 2 unanswered (so a
+    buffering proxy cannot hold seconds of them); one that stops answering is closed after 5 s and
+    counted as `preview_not_taken`."""
+    reason = 'websocket_stuck_closes_total{reason="preview_not_taken"'
+    before = metric(host, port, reason)
+    sock = ws_connect(host, port, "/api/v1/interact")
+    for _ in range(ws_read(sock, 1)[1]):  # answers what came so far
+        ws_send(sock, {"type": "preview_ack"})
+    held = ws_read(sock, 2)[1]
+    assert held == 2, f"{held} previews unanswered"
+    ws_send(sock, {"type": "preview_ack"})
+    more = ws_read(sock, 1)[1]
+    assert more == 1, f"{more} previews after one ack"
+    end = time.time() + 10
+    while time.time() < end and get_json(host, port, "/api/v1/status")["interact"]["sessions"] > 0:
+        ws_read(sock, 0.5)
+    closes = metric(host, port, reason) - before
+    assert closes == 1, f"{closes} preview_not_taken closes"
+    print(f"OK: preview flow control: {held} previews unanswered, 1 more per ack; closed 5 s after the last ack and counted")
+    sock.close()
+
+
 def main():
     host, port = (sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8160").split(":")
     port = int(port)
@@ -311,6 +335,7 @@ def main():
     stuck_client(host, port, observer)
     preview_rates(host, port)
     preview_new_pictures(host, port)
+    preview_flow_control(host, port)
 
 
 if __name__ == "__main__":
