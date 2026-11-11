@@ -17,7 +17,7 @@ namespace
 
 TEST_CASE("URLs parse into scheme, host and port")
 {
-    auto u = mbs::ops::parseUrl("https://User@Graphics.Media.INT:8443/a?b#c");
+    auto u = mbs::ops::parseUrl("https://User@Graphics.Example.COM:8443/a?b#c");
     REQUIRE(u);
     CHECK(u->scheme == "https");
     CHECK(u->host == "graphics.example.com");
