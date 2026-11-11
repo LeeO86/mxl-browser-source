@@ -4,6 +4,8 @@ Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writ
 
 Part of [mxl-stack](https://github.com/LeeO86/mxl-stack), a collection of open-source MXL media functions with Docker Compose and Kubernetes examples.
 
+![mxl-browser-source: a lower third rendered over a transparent background](docs/images/web-ui.png)
+
 **Status: 1.4.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
 
 ## Run it
