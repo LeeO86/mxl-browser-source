@@ -2,12 +2,12 @@
 
 Status: v0.9 (implemented in this repository; spike results folded in, deviations in IMPLEMENTATION_PLAN.md)
 Repository: `LeeO86/mxl-browser-source`
-Sibling projects this spec aligns with: `LeeO86/mxl-multiviewer`, `LeeO86/mxl-test-player`, `LeeO86/mxl-webrtc-monitor`, `LeeO86/mxl-decklink`, and the platform meta repo `mmz-srf/mxl-poc-platform`
+Sibling projects this spec aligns with: `LeeO86/mxl-multiviewer`, `LeeO86/mxl-test-player`, `LeeO86/mxl-webrtc-monitor`, `LeeO86/mxl-decklink`, and the (private) platform repository
 Functional inspiration: the OBS Browser Source and its "Interact" window (`obsproject/obs-browser`), the CasparCG HTML producer and its template API (`CasparCG/server`, `src/modules/html`)
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119.
 
-The platform guideline G1–G14 (`mmz-srf/mxl-poc-platform`, `docs/requests/leeo86-v1-readiness.md`, "contract v1.0.0") and the follow-ups after the v1 releases (`docs/requests/leeo86-v1-followups.md`) apply in full. Where this document and the guideline disagree, the guideline wins; §20 lists every such conflict. Statements marked **(spike)** are not proven for the pinned CEF version and are settled by the spikes in §19 before the code depends on them.
+The platform guideline G1–G14 (the private platform repository, `docs/requests/leeo86-v1-readiness.md`, "contract v1.0.0") and the follow-ups after the v1 releases (`docs/requests/leeo86-v1-followups.md`) apply in full. Where this document and the guideline disagree, the guideline wins; §20 lists every such conflict. Statements marked **(spike)** are not proven for the pinned CEF version and are settled by the spikes in §19 before the code depends on them.
 
 ---
 
@@ -567,7 +567,7 @@ The file is one JSON document, written atomically by the UI and the API (`tmp` +
   },
   "presets": [
     {"name": "Bars", "url": "https://templates.local/bars.html", "background": "#000000"},
-    {"name": "Scoreboard", "url": "https://graphics.media.int/scoreboard/", "css": "", "js": ""}
+    {"name": "Scoreboard", "url": "https://graphics.example.com/scoreboard/", "css": "", "js": ""}
   ],
   "senders": {"video": true, "key": true, "audio": true}
 }

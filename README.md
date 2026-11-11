@@ -2,7 +2,11 @@
 
 Renders a web page offscreen with the Chromium Embedded Framework (CEF) and writes it as MXL flows: video (v210, optionally with a key as v210a or a separate key flow) and audio (float32, 48 kHz). One BeginFrame per MXL grain index keeps the page frame-locked to house time (TAI). Senders register with NMOS (IS-04/IS-05, BCP-007-03) and are routed like every other media function of the MXL PoC platform. An operator sees a preview and can interact with the page from the web UI, like the "Interact" window of the OBS Browser Source; HTML graphics templates are driven CasparCG-style (`play`, `stop`, `next`, `update`), and EBU OGraf v1 graphics play on up to 8 layers with a graphics library, a controller tab, an `ograf` widget and the OGraf Server API.
 
-**Status: 1.2.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
+Part of [mxl-stack](https://github.com/LeeO86/mxl-stack), a collection of open-source MXL media functions with Docker Compose and Kubernetes examples.
+
+![mxl-browser-source: a lower third rendered over a transparent background](docs/images/web-ui.png)
+
+**Status: 1.4.0.** [`SPEC.md`](SPEC.md) is the contract, [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) records pins, spike results and deviations, [`docs/api.md`](docs/api.md) is the wire format of the HTTP and WebSocket API.
 
 ## Run it
 
@@ -11,7 +15,7 @@ The own MXL domain must be on a tmpfs: the MXL root, or a tmpfs mounted at the d
 ```sh
 docker run -d --name browser --network host --shm-size 1g --ulimit rtprio=10 -u 1000:1000 \
   -v /Volumes/mxl:/Volumes/mxl -v $PWD/config:/config \
-  -e NMOS_REGISTRY_ADDRESS=10.0.0.10 -e NMOS_REGISTRY_PORT=8010 \
+  -e NMOS_REGISTRY_ADDRESS=192.0.2.10 -e NMOS_REGISTRY_PORT=8010 \
   -e MXL_OUTPUT_DOMAIN_DIR=/Volumes/mxl/browser-1 \
   ghcr.io/leeo86/mxl-browser-source:<version>
 ```

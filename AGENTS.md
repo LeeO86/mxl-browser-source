@@ -1,7 +1,7 @@
 # Agent notes
 
 - Read `SPEC.md` before changing behaviour. Create `IMPLEMENTATION_PLAN.md` with the first code: pins, spike results (SPEC §19), source layout, every deviation from the spec (numbered), and the platform guideline G1–G14 table (Item | Requirement | Status | Evidence | Change), as in mxl-multiviewer.
-- The platform guideline (`mmz-srf/mxl-poc-platform` `docs/requests/leeo86-v1-readiness.md`, G1–G14) and its follow-ups win over this repo's habits. Record any conflict in SPEC §20.
+- The platform guideline (the private platform repository, `docs/requests/leeo86-v1-readiness.md`, G1–G14) and its follow-ups win over this repo's habits. Record any conflict in SPEC §20.
 - C++20, CMake ≥ 3.24, Ninja. No GStreamer in the media path. `-Wall -Wextra`; a clean build is the lint signal.
 - Pins, each in exactly two places (`docker/Dockerfile` build args and `.github/workflows/ci.yaml`, with a "keep in sync" comment):
   - CEF `144.0.21+g4f5b28c+chromium-144.0.7559.248` (Linux x64 minimal distribution, hash-checked);

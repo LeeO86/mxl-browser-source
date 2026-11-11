@@ -292,7 +292,7 @@ namespace mbs::nmos
                 if (s.dnsSd)
                 {
                     // Multicast DNS-SD through Avahi works in "local." only. Unset, nmos-cpp takes the
-                    // interface's DNS domain (media.int in the lab), and Avahi fails every browse and
+                    // interface's DNS domain (an internal domain in the lab), and Avahi fails every browse and
                     // advertisement with -65537.
                     config[U("domain")] = web::json::value::string(U("local."));
                 }
